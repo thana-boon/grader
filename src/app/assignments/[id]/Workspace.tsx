@@ -4,6 +4,14 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { outputMatches } from '@/lib/grading'
 import { compareDrawings, parseDrawing } from '@/lib/turtleGrading'
+import { evaluateHtml, parseCheck } from '@/lib/htmlGrading'
+import {
+  evaluateScratch,
+  parseSb3,
+  parseScratchCheck,
+  type ScratchStats,
+} from '@/lib/scratchGrading'
+import { languageLabel } from '@/lib/languages'
 import { submitAssignment } from '../actions'
 import ConfirmDialog from '@/components/ConfirmDialog'
 import TurtleCanvas from '@/components/TurtleCanvas'
@@ -23,23 +31,88 @@ type CaseResult = {
 
 export default function Workspace({
   assignmentId,
+  problemId,
   language,
   starterCode,
   testCases,
   expectedDrawing,
+  dataset,
   lastCode,
   canSubmit,
 }: {
   assignmentId: number
+  problemId: number
   language: string
   starterCode: string
   testCases: WorkspaceTestCase[]
   expectedDrawing: string | null
+  dataset: { name: string; content: string } | null
   lastCode: string | null
   canSubmit: boolean
 }) {
   const router = useRouter()
   const isTurtle = language === 'turtle'
+  const isPandas = language === 'pandas'
+  const isHtml = language === 'html'
+  const isPhp = language === 'php'
+  const isScratch = language === 'scratch'
+
+  // ตัวเลือกตัวรัน — pandas ต้องโหลดแพ็กเกจ + เขียนไฟล์ข้อมูลก่อนรัน
+  const runOpts = () => ({
+    packages: isPandas ? ['pandas'] : undefined,
+    files: dataset ? [dataset] : undefined,
+    timeoutMs: isPandas ? 30_000 : undefined,
+  })
+
+  // เกณฑ์ตรวจ HTML / Scratch (แปลงจาก test cases — input คือ JSON ของเกณฑ์)
+  const htmlChecks = isHtml ? testCases.map((tc) => parseCheck(tc.input)) : []
+  const scratchChecks = isScratch ? testCases.map((tc) => parseScratchCheck(tc.input)) : []
+
+  // ไฟล์ .sb3 ที่นักเรียนเลือก
+  const [sb3File, setSb3File] = useState<File | null>(null)
+  const [sb3Stats, setSb3Stats] = useState<ScratchStats | null>(null)
+
+  const handleSb3File = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    try {
+      const stats = await parseSb3(file)
+      setSb3File(file)
+      setSb3Stats(stats)
+      setResults(testCases.map(() => null))
+    } catch (err) {
+      setSb3File(null)
+      setSb3Stats(null)
+      setErrorModal(err instanceof Error ? err.message : 'อ่านไฟล์ไม่สำเร็จ')
+    }
+  }
+
+  const runScratchChecks = (): boolean[] | null => {
+    if (!sb3Stats) {
+      setErrorModal('เลือกไฟล์ .sb3 ของคุณก่อน')
+      return null
+    }
+    const flags = evaluateScratch(sb3Stats, scratchChecks)
+    setResults(flags.map((pass) => ({ pass, actual: '', error: null, timedOut: false })))
+    return flags
+  }
+
+  // รันโค้ดหนึ่งครั้ง — PHP ส่งไปรันบนเซิร์ฟเวอร์, ที่เหลือรันในเบราว์เซอร์
+  const runStudentCode = async (input: string) => {
+    if (isPhp) {
+      const r = await fetch('/api/run/php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code, stdin: input }),
+      })
+      if (!r.ok)
+        return { ok: false, output: '', error: 'เรียกตัวรัน PHP บนเซิร์ฟเวอร์ไม่สำเร็จ', timedOut: false }
+      return (await r.json()) as { ok: boolean; output: string; error: string | null; timedOut: boolean }
+    }
+    const { pythonRunner } = await import('@/lib/pythonRunner')
+    return pythonRunner.run(code, input, runOpts())
+  }
   const [code, setCode] = useState(lastCode ?? starterCode)
   const [busy, setBusy] = useState<'idle' | 'run' | 'submit'>('idle')
   const [statusMsg, setStatusMsg] = useState<string | null>(null)
@@ -70,19 +143,25 @@ export default function Workspace({
   }
 
   const runCases = async (indexes: number[]) => {
-    const { pythonRunner } = await import('@/lib/pythonRunner')
-    setStatusMsg('กำลังโหลดตัวรัน Python (ครั้งแรกใช้เวลาสักครู่)...')
-    const warm = await pythonRunner.warmup()
-    if (warm.timedOut) {
-      setStatusMsg('โหลดตัวรัน Python ไม่สำเร็จ — ตรวจสอบอินเทอร์เน็ตแล้วลองใหม่')
-      return null
+    if (!isPhp) {
+      const { pythonRunner } = await import('@/lib/pythonRunner')
+      setStatusMsg(
+        isPandas
+          ? 'กำลังโหลดตัวรัน Python + pandas (ครั้งแรกใช้เวลาสักครู่)...'
+          : 'กำลังโหลดตัวรัน Python (ครั้งแรกใช้เวลาสักครู่)...'
+      )
+      const warm = await pythonRunner.warmup(isPandas ? ['pandas'] : undefined)
+      if (warm.timedOut) {
+        setStatusMsg('โหลดตัวรัน Python ไม่สำเร็จ — ตรวจสอบอินเทอร์เน็ตแล้วลองใหม่')
+        return null
+      }
     }
 
     const out: (CaseResult | null)[] = [...results]
     for (let n = 0; n < indexes.length; n++) {
       const i = indexes[n]
       setStatusMsg(`กำลังตรวจเคสที่ ${n + 1}/${indexes.length}...`)
-      const res = await pythonRunner.run(code, testCases[i].input)
+      const res = await runStudentCode(testCases[i].input)
       out[i] = {
         pass: res.ok && outputMatches(res.output, testCases[i].expectedOutput),
         actual: res.output,
@@ -128,7 +207,20 @@ export default function Workspace({
     return { percent, drawing: res.drawing }
   }
 
+  // html: ตรวจโครงสร้างกับเกณฑ์ทุกข้อ (รันในเครื่องทันที ไม่ต้องโหลดอะไร)
+  const runHtmlChecks = (): boolean[] => {
+    const flags = evaluateHtml(code, htmlChecks)
+    setResults(
+      flags.map((pass) => ({ pass, actual: '', error: null, timedOut: false }))
+    )
+    return flags
+  }
+
   const handleRun = async () => {
+    if (isScratch) {
+      runScratchChecks()
+      return
+    }
     if (!code.trim()) {
       setErrorModal('ยังไม่ได้เขียนโค้ด')
       return
@@ -136,6 +228,7 @@ export default function Workspace({
     setBusy('run')
     try {
       if (isTurtle) await runTurtle()
+      else if (isHtml) runHtmlChecks()
       else await runCases(visibleIndexes)
     } finally {
       setBusy('idle')
@@ -143,24 +236,47 @@ export default function Workspace({
   }
 
   const handleSubmit = async () => {
-    if (!code.trim()) {
+    if (!isScratch && !code.trim()) {
       setErrorModal('ยังไม่ได้เขียนโค้ด')
       return
     }
     setBusy('submit')
     try {
-      let payload: boolean[] | { percent: number; drawing: string | null }
+      let payload: Parameters<typeof submitAssignment>[3]
+      let codeToSend = code
       if (isTurtle) {
         const turtleResult = await runTurtle()
         if (turtleResult === null) return
         payload = turtleResult
+      } else if (isHtml) {
+        payload = runHtmlChecks()
+      } else if (isScratch) {
+        const flags = runScratchChecks()
+        if (!flags || !sb3File || !sb3Stats) return
+        // อัปโหลดไฟล์ .sb3 ให้ครูดาวน์โหลดไปเปิดดูได้
+        setStatusMsg('กำลังอัปโหลดไฟล์...')
+        const fd = new FormData()
+        fd.append('file', sb3File)
+        const up = await fetch('/api/scratch/upload', { method: 'POST', body: fd })
+        const upJson = await up.json().catch(() => null)
+        if (!up.ok || !upJson?.token) {
+          setStatusMsg(null)
+          setErrorModal(upJson?.error ?? 'อัปโหลดไฟล์ไม่สำเร็จ')
+          return
+        }
+        payload = {
+          flags,
+          fileToken: upJson.token as string,
+          stats: { spriteCount: sb3Stats.spriteCount, totalBlocks: sb3Stats.totalBlocks },
+        }
+        codeToSend = `ไฟล์: ${sb3File.name}\nsprite: ${sb3Stats.spriteCount} · block รวม: ${sb3Stats.totalBlocks}`
       } else {
         const all = await runCases(testCases.map((_, i) => i))
         if (!all) return
         payload = all.map((r) => r?.pass === true)
       }
       setStatusMsg('กำลังบันทึกผล...')
-      const res = await submitAssignment(assignmentId, code, payload)
+      const res = await submitAssignment(assignmentId, problemId, codeToSend, payload)
       setStatusMsg(null)
       if (res.error) {
         setErrorModal(res.error)
@@ -192,11 +308,112 @@ export default function Workspace({
 
   return (
     <div className="space-y-4">
+      {/* ไฟล์ข้อมูลแนบ (pandas) */}
+      {dataset && (
+        <div className="bg-white rounded-xl border border-gray-200 p-5">
+          <h2 className="text-base font-semibold text-gray-900 mb-1">
+            📄 ไฟล์ข้อมูล: <code className="text-indigo-700">{dataset.name}</code>
+          </h2>
+          <p className="text-xs text-gray-400 mb-2">
+            อ่านในโค้ดได้ เช่น{' '}
+            <code className="bg-gray-100 px-1 rounded">
+              pd.read_csv(&apos;{dataset.name}&apos;)
+            </code>
+          </p>
+          <details>
+            <summary className="text-xs text-indigo-600 cursor-pointer hover:underline">
+              ดูตัวอย่างข้อมูล
+            </summary>
+            <pre className="mt-2 bg-gray-50 border border-gray-100 rounded-lg p-3 text-xs font-mono overflow-x-auto max-h-48">
+              {dataset.content.split('\n').slice(0, 20).join('\n')}
+              {dataset.content.split('\n').length > 20 && '\n...'}
+            </pre>
+          </details>
+        </div>
+      )}
+
+      {/* โหมด scratch: อัปโหลดไฟล์ + เกณฑ์ */}
+      {isScratch && (
+        <>
+          <div className="bg-white rounded-xl border border-gray-200 p-5">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-base font-semibold text-gray-900">
+                🧩 ไฟล์งาน Scratch ของฉัน
+              </h2>
+              <div className="flex gap-2">
+                <button
+                  onClick={handleRun}
+                  disabled={busy !== 'idle'}
+                  className="px-4 py-1.5 text-sm font-medium text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition disabled:opacity-60"
+                >
+                  ▶ ตรวจไฟล์
+                </button>
+                <button
+                  onClick={handleSubmit}
+                  disabled={busy !== 'idle' || !canSubmit}
+                  className="px-4 py-1.5 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition disabled:opacity-60"
+                >
+                  {busy === 'submit' ? 'กำลังส่ง...' : 'ส่งงาน'}
+                </button>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="px-4 py-2 text-sm font-medium text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition cursor-pointer">
+                📁 เลือกไฟล์ .sb3...
+                <input type="file" accept=".sb3" onChange={handleSb3File} className="hidden" />
+              </label>
+              {sb3File && sb3Stats ? (
+                <p className="text-sm text-gray-700">
+                  <span className="font-medium">{sb3File.name}</span>
+                  <span className="text-gray-400">
+                    {' '}· {sb3Stats.spriteCount} sprite · {sb3Stats.totalBlocks} block
+                  </span>
+                </p>
+              ) : (
+                <p className="text-sm text-gray-400">ยังไม่ได้เลือกไฟล์</p>
+              )}
+            </div>
+            <p className="text-xs text-gray-400 mt-2">
+              ทำงานในโปรแกรม/เว็บ Scratch แล้วบันทึกไฟล์ (File → Save to your computer)
+              จากนั้นนำไฟล์ .sb3 มาส่งที่นี่
+            </p>
+          </div>
+
+          <div className="bg-white rounded-xl border border-gray-200 p-5">
+            <h2 className="text-base font-semibold text-gray-900 mb-3">
+              เกณฑ์การตรวจ ({testCases.length} ข้อ)
+            </h2>
+            <ul className="space-y-2">
+              {testCases.map((tc, i) => {
+                const r = results[i]
+                return (
+                  <li
+                    key={i}
+                    className="flex items-center justify-between border border-gray-200 rounded-lg px-4 py-3"
+                  >
+                    <p className="text-sm text-gray-700">
+                      {tc.isHidden ? (
+                        <span className="text-gray-400">
+                          เกณฑ์ลับข้อที่ {i + 1} — ตรวจตอนกดส่ง
+                        </span>
+                      ) : (
+                        tc.expectedOutput
+                      )}
+                    </p>
+                    {caseStatus(r)}
+                  </li>
+                )
+              })}
+            </ul>
+          </div>
+        </>
+      )}
+
       {/* Editor */}
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <div className={`bg-white rounded-xl border border-gray-200 overflow-hidden ${isScratch ? 'hidden' : ''}`}>
         <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-100 bg-gray-50">
           <p className="text-sm font-medium text-gray-700">
-            โค้ดของฉัน ({isTurtle ? 'Python Turtle' : 'Python'})
+            โค้ดของฉัน ({languageLabel(language)})
           </p>
           <div className="flex gap-2">
             <button
@@ -238,6 +455,53 @@ export default function Workspace({
         </div>
       )}
 
+      {/* โหมด html: ตัวอย่างหน้าเว็บสด + ผลเกณฑ์ */}
+      {isHtml && (
+        <>
+          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+            <div className="px-4 py-2.5 border-b border-gray-100 bg-gray-50">
+              <p className="text-sm font-medium text-gray-700">
+                🌐 ตัวอย่างหน้าเว็บ (อัปเดตตามโค้ดทันที)
+              </p>
+            </div>
+            <iframe
+              title="แสดงผลหน้าเว็บ"
+              sandbox=""
+              srcDoc={code}
+              className="w-full h-80 bg-white"
+            />
+          </div>
+
+          <div className="bg-white rounded-xl border border-gray-200 p-5">
+            <h2 className="text-base font-semibold text-gray-900 mb-3">
+              เกณฑ์การตรวจ ({testCases.length} ข้อ)
+            </h2>
+            <ul className="space-y-2">
+              {testCases.map((tc, i) => {
+                const r = results[i]
+                return (
+                  <li
+                    key={i}
+                    className="flex items-center justify-between border border-gray-200 rounded-lg px-4 py-3"
+                  >
+                    <p className="text-sm text-gray-700">
+                      {tc.isHidden ? (
+                        <span className="text-gray-400">
+                          เกณฑ์ลับข้อที่ {i + 1} — ตรวจตอนกดส่ง
+                        </span>
+                      ) : (
+                        tc.expectedOutput
+                      )}
+                    </p>
+                    {caseStatus(r)}
+                  </li>
+                )
+              })}
+            </ul>
+          </div>
+        </>
+      )}
+
       {/* โหมด turtle: ภาพเป้าหมาย vs ภาพของฉัน */}
       {isTurtle && (
         <div className="bg-white rounded-xl border border-gray-200 p-5">
@@ -277,7 +541,7 @@ export default function Workspace({
       )}
 
       {/* ผลรายเคส */}
-      <div className={`bg-white rounded-xl border border-gray-200 p-5 ${isTurtle ? 'hidden' : ''}`}>
+      <div className={`bg-white rounded-xl border border-gray-200 p-5 ${isTurtle || isHtml ? 'hidden' : ''}`}>
         <h2 className="text-base font-semibold text-gray-900 mb-3">ผลการตรวจ</h2>
         <div className="space-y-3">
           {testCases.map((tc, i) => {

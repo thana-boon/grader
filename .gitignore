@@ -39,3 +39,6 @@ next-env.d.ts
 
 # prisma
 prisma/*.db
+
+# ไฟล์ .sb3 ที่นักเรียนส่ง
+/uploads

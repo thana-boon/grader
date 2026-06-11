@@ -2,13 +2,22 @@
 
 import { prisma } from '@/lib/prisma'
 import { getCurrentUser } from '@/lib/auth'
+import { describeCheck, type HtmlCheck } from '@/lib/htmlGrading'
+import {
+  describeScratchCheck,
+  SCRATCH_RULES,
+  type ScratchCheck,
+} from '@/lib/scratchGrading'
 import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
 
 export type ActionResult = { error?: string }
 
-// ภาษาที่เปิดใช้แล้ว — เฟสถัดไป: pandas, html, php, scratch
-const LANGUAGES = ['python', 'turtle']
+// ครบทุกภาษาตามแผนแล้ว
+const LANGUAGES = ['python', 'turtle', 'pandas', 'html', 'php', 'scratch']
+const MAX_HTML_CHECKS = 20
+const SCRATCH_RULE_KEYS = [...Object.keys(SCRATCH_RULES), 'sprites', 'total_blocks', 'opcode']
+const MAX_DATASET_BYTES = 2_000_000 // ~2MB กันไฟล์ใหญ่เกิน (เก็บใน MEDIUMTEXT และส่งให้เบราว์เซอร์ทุกครั้งที่รัน)
 const MAX_TEST_CASES = 20
 
 async function requireTeacher() {
@@ -25,6 +34,8 @@ type ParsedProblem = {
   language: string
   starterCode: string | null
   solutionCode: string | null
+  datasetName: string | null
+  datasetContent: string | null
   testCases: ParsedTestCase[]
 }
 
@@ -40,6 +51,22 @@ function parseProblemForm(formData: FormData): ParseResult {
   if (!title) return { ok: false, error: 'กรุณาใส่ชื่อโจทย์' }
   if (!description) return { ok: false, error: 'กรุณาใส่คำสั่ง/คำอธิบายโจทย์' }
   if (!LANGUAGES.includes(language)) return { ok: false, error: 'ภาษานี้ยังไม่เปิดใช้งาน' }
+
+  // ไฟล์ข้อมูลแนบ — เฉพาะ pandas
+  let datasetName: string | null = null
+  let datasetContent: string | null = null
+  if (language === 'pandas') {
+    datasetContent = (formData.get('datasetContent') as string) || null
+    if (datasetContent) {
+      if (datasetContent.length > MAX_DATASET_BYTES) {
+        return { ok: false, error: 'ไฟล์ข้อมูลใหญ่เกินไป (จำกัด ~2MB)' }
+      }
+      datasetName = ((formData.get('datasetName') as string) || 'data.csv').trim()
+      if (!/^[\w.\-]{1,60}$/.test(datasetName)) {
+        return { ok: false, error: 'ชื่อไฟล์ข้อมูลต้องเป็นอักษรอังกฤษ/ตัวเลข เช่น data.csv' }
+      }
+    }
+  }
 
   // โหมด turtle — เกณฑ์ตรวจคือ "ภาพเฉลย" (เก็บเป็น test case เดียว expectedOutput = JSON ภาพ)
   if (language === 'turtle') {
@@ -65,7 +92,113 @@ function parseProblemForm(formData: FormData): ParseResult {
         language,
         starterCode,
         solutionCode,
+        datasetName: null,
+        datasetContent: null,
         testCases: [{ input: '', expectedOutput: drawing, isHidden: false }],
+      },
+    }
+  }
+
+  // โหมด scratch — เกณฑ์ตรวจ block เก็บเป็น test case: input = JSON เกณฑ์, expectedOutput = คำอธิบาย
+  if (language === 'scratch') {
+    let rawChecks: unknown
+    try {
+      rawChecks = JSON.parse((formData.get('scratchChecks') as string) ?? '[]')
+    } catch {
+      return { ok: false, error: 'ข้อมูลเกณฑ์การตรวจไม่ถูกต้อง' }
+    }
+    if (!Array.isArray(rawChecks) || rawChecks.length === 0) {
+      return { ok: false, error: 'ต้องมีเกณฑ์การตรวจอย่างน้อย 1 ข้อ' }
+    }
+    if (rawChecks.length > MAX_HTML_CHECKS) {
+      return { ok: false, error: `เกณฑ์การตรวจได้สูงสุด ${MAX_HTML_CHECKS} ข้อ` }
+    }
+
+    const testCases: ParsedTestCase[] = []
+    for (const [i, raw] of rawChecks.entries()) {
+      const c = raw as (ScratchCheck & { isHidden?: boolean }) | null
+      if (!c || !SCRATCH_RULE_KEYS.includes(c.rule)) {
+        return { ok: false, error: `เกณฑ์ที่ ${i + 1}: รูปแบบไม่ถูกต้อง` }
+      }
+      if (c.rule === 'opcode' && (typeof c.opcode !== 'string' || !c.opcode.trim())) {
+        return { ok: false, error: `เกณฑ์ที่ ${i + 1}: ยังไม่ได้ใส่ชื่อ opcode` }
+      }
+      const check: ScratchCheck = {
+        rule: c.rule,
+        count: typeof c.count === 'number' && c.count > 1 ? c.count : undefined,
+        opcode: c.rule === 'opcode' ? c.opcode!.trim() : undefined,
+      }
+      testCases.push({
+        input: JSON.stringify(check),
+        expectedOutput: describeScratchCheck(check),
+        isHidden: c.isHidden === true,
+      })
+    }
+
+    return {
+      ok: true,
+      data: {
+        title,
+        description,
+        language,
+        starterCode: null,
+        solutionCode: null,
+        datasetName: null,
+        datasetContent: null,
+        testCases,
+      },
+    }
+  }
+
+  // โหมด html — เกณฑ์ตรวจโครงสร้าง เก็บเป็น test case: input = JSON เกณฑ์, expectedOutput = คำอธิบาย
+  if (language === 'html') {
+    let rawChecks: unknown
+    try {
+      rawChecks = JSON.parse((formData.get('htmlChecks') as string) ?? '[]')
+    } catch {
+      return { ok: false, error: 'ข้อมูลเกณฑ์การตรวจไม่ถูกต้อง' }
+    }
+    if (!Array.isArray(rawChecks) || rawChecks.length === 0) {
+      return { ok: false, error: 'ต้องมีเกณฑ์การตรวจอย่างน้อย 1 ข้อ' }
+    }
+    if (rawChecks.length > MAX_HTML_CHECKS) {
+      return { ok: false, error: `เกณฑ์การตรวจได้สูงสุด ${MAX_HTML_CHECKS} ข้อ` }
+    }
+
+    const testCases: ParsedTestCase[] = []
+    for (const [i, raw] of rawChecks.entries()) {
+      const c = raw as (HtmlCheck & { isHidden?: boolean }) | null
+      const selector = typeof c?.selector === 'string' ? c.selector.trim() : ''
+      if (!selector) return { ok: false, error: `เกณฑ์ที่ ${i + 1}: ยังไม่ได้ใส่ selector` }
+
+      let check: HtmlCheck
+      if (c!.type === 'exists') {
+        check = { type: 'exists', selector, count: typeof c!.count === 'number' && c!.count > 1 ? c!.count : undefined }
+      } else if (c!.type === 'text' && typeof c!.text === 'string' && c!.text.trim()) {
+        check = { type: 'text', selector, text: c!.text }
+      } else if (c!.type === 'attr' && typeof c!.attr === 'string' && c!.attr.trim()) {
+        check = { type: 'attr', selector, attr: c!.attr.trim(), value: typeof c!.value === 'string' && c!.value ? c!.value : undefined }
+      } else {
+        return { ok: false, error: `เกณฑ์ที่ ${i + 1}: กรอกข้อมูลไม่ครบ` }
+      }
+      testCases.push({
+        input: JSON.stringify(check),
+        expectedOutput: describeCheck(check),
+        isHidden: c!.isHidden === true,
+      })
+    }
+
+    return {
+      ok: true,
+      data: {
+        title,
+        description,
+        language,
+        starterCode,
+        solutionCode,
+        datasetName: null,
+        datasetContent: null,
+        testCases,
       },
     }
   }
@@ -96,7 +229,16 @@ function parseProblemForm(formData: FormData): ParseResult {
 
   return {
     ok: true,
-    data: { title, description, language, starterCode, solutionCode, testCases },
+    data: {
+      title,
+      description,
+      language,
+      starterCode,
+      solutionCode,
+      datasetName,
+      datasetContent,
+      testCases,
+    },
   }
 }
 

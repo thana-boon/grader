@@ -7,21 +7,16 @@ import { getStudentFilterOptions } from '@/lib/students'
 import Navbar from '@/components/Navbar'
 import AssignForm from './AssignForm'
 
-export default async function NewAssignmentPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ problem?: string }>
-}) {
+export default async function NewAssignmentPage() {
   const user = await getCurrentUser()
   if (!user || user.role !== 'teacher') redirect('/login')
 
-  const { problem: problemParam } = await searchParams
   const active = await getActiveSetting()
 
   const [problems, options] = await Promise.all([
     prisma.problem.findMany({
       orderBy: { updatedAt: 'desc' },
-      select: { id: true, title: true },
+      select: { id: true, title: true, language: true },
     }),
     active
       ? getStudentFilterOptions(active.academicYearId)
@@ -63,7 +58,6 @@ export default async function NewAssignmentPage({
             problems={problems}
             classLevels={options.classLevels}
             classRooms={options.classRooms}
-            defaultProblemId={problemParam ? parseInt(problemParam) : undefined}
           />
         ) : null}
       </main>

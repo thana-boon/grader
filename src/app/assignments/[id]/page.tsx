@@ -4,12 +4,11 @@ import Link from 'next/link'
 import { prisma } from '@/lib/prisma'
 import { getActiveSetting } from '@/lib/academicYear'
 import { findSchoolStudentByCodeAndYear } from '@/lib/students'
-import { assignmentMatchesStudent } from '@/lib/assignments'
+import { targetsMatchStudent } from '@/lib/assignments'
 import { languageLabel, scoreLabel } from '@/lib/languages'
 import Navbar from '@/components/Navbar'
-import Workspace from './Workspace'
 
-export default async function AssignmentPage({
+export default async function TaskPage({
   params,
 }: {
   params: Promise<{ id: string }>
@@ -30,34 +29,44 @@ export default async function AssignmentPage({
   )
   if (!student) redirect('/dashboard/student')
 
-  const assignment = await prisma.assignment.findUnique({
+  const task = await prisma.assignment.findUnique({
     where: { id },
     include: {
-      problem: { include: { testCases: { orderBy: { sortOrder: 'asc' } } } },
+      targets: true,
+      problems: {
+        orderBy: { sortOrder: 'asc' },
+        include: { problem: { select: { id: true, title: true, language: true } } },
+      },
     },
   })
-  // เปิดได้เฉพาะงานที่มอบหมายถึงตัวเอง (ทั้งห้องหรือรายคน) ในเทอมปัจจุบัน
+  // เปิดได้เฉพาะงานที่มอบหมายถึงตัวเอง ในเทอมปัจจุบัน
   if (
-    !assignment ||
-    assignment.academicYearId !== active.academicYearId ||
-    assignment.semester !== active.semester ||
-    !assignmentMatchesStudent(assignment, student)
+    !task ||
+    task.academicYearId !== active.academicYearId ||
+    task.semester !== active.semester ||
+    !targetsMatchStudent(task.targets, student)
   ) {
     notFound()
   }
 
-  const lastSubmission = await prisma.submission.findFirst({
+  // ผลส่งล่าสุดของแต่ละข้อ
+  const submissions = await prisma.submission.findMany({
     where: { assignmentId: id, studentCode: student.student_code },
     orderBy: { createdAt: 'desc' },
   })
+  const latest = new Map<number, (typeof submissions)[number]>()
+  for (const s of submissions) {
+    if (!latest.has(s.problemId)) latest.set(s.problemId, s)
+  }
 
-  const overdue = assignment.dueAt !== null && new Date() > assignment.dueAt
+  const doneCount = task.problems.filter((tp) => latest.has(tp.problem.id)).length
+  const overdue = task.dueAt !== null && new Date() > task.dueAt
 
   return (
     <div className="min-h-screen bg-gray-50">
       <Navbar user={user} />
-      <main className="max-w-5xl mx-auto px-4 sm:px-6 py-6">
-        <div className="mb-5">
+      <main className="max-w-4xl mx-auto px-4 sm:px-6 py-6">
+        <div className="mb-6">
           <Link
             href="/dashboard/student"
             className="text-sm text-gray-500 hover:text-indigo-600"
@@ -65,68 +74,82 @@ export default async function AssignmentPage({
             ← กลับหน้าหลัก
           </Link>
           <div className="flex flex-wrap items-center gap-3 mt-2">
-            <h1 className="text-2xl font-bold text-gray-900">
-              {assignment.problem.title}
-            </h1>
-            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
-              {languageLabel(assignment.problem.language)}
+            <h1 className="text-2xl font-bold text-gray-900">{task.title}</h1>
+            <span
+              className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${
+                doneCount === task.problems.length
+                  ? 'bg-green-100 text-green-700'
+                  : 'bg-gray-100 text-gray-600'
+              }`}
+            >
+              ทำแล้ว {doneCount}/{task.problems.length} ข้อ
             </span>
-            {lastSubmission && (
-              <span
-                className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
-                  lastSubmission.passed === lastSubmission.total
-                    ? 'bg-green-100 text-green-700'
-                    : 'bg-amber-100 text-amber-700'
-                }`}
-              >
-                ส่งล่าสุด:{' '}
-                {scoreLabel(
-                  assignment.problem.language,
-                  lastSubmission.passed,
-                  lastSubmission.total
-                )}
-              </span>
-            )}
           </div>
           <p className="text-sm text-gray-500 mt-1">
-            {assignment.dueAt
-              ? `กำหนดส่ง ${assignment.dueAt.toLocaleString('th-TH', {
+            {task.dueAt
+              ? `กำหนดส่ง ${task.dueAt.toLocaleString('th-TH', {
                   dateStyle: 'medium',
                   timeStyle: 'short',
-                })}${overdue ? ' (เลยกำหนดแล้ว)' : ''}`
+                })}${overdue ? ' (เลยกำหนดแล้ว — ส่งงานไม่ได้)' : ''}`
               : 'ไม่มีกำหนดส่ง'}
           </p>
         </div>
 
-        {/* คำสั่งโจทย์ */}
-        <div className="bg-white rounded-xl border border-gray-200 p-5 mb-4">
-          <h2 className="text-base font-semibold text-gray-900 mb-2">คำสั่ง</h2>
-          <p className="text-sm text-gray-700 whitespace-pre-wrap">
-            {assignment.problem.description}
-          </p>
+        {/* รายการข้อ */}
+        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+          <ul className="divide-y divide-gray-100">
+            {task.problems.map((tp, i) => {
+              const last = latest.get(tp.problem.id)
+              return (
+                <li key={tp.id}>
+                  <Link
+                    href={`/assignments/${task.id}/${tp.problem.id}`}
+                    className="flex items-center justify-between px-6 py-4 hover:bg-gray-50 transition"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div
+                        className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold shrink-0 ${
+                          last && last.passed === last.total
+                            ? 'bg-green-100 text-green-700'
+                            : last
+                              ? 'bg-amber-100 text-amber-700'
+                              : 'bg-gray-100 text-gray-500'
+                        }`}
+                      >
+                        {i + 1}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-gray-900 truncate">
+                          {tp.problem.title}
+                        </p>
+                        <p className="text-xs text-gray-500">
+                          {languageLabel(tp.problem.language)}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="shrink-0 ml-3">
+                      {last ? (
+                        <span
+                          className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${
+                            last.passed === last.total
+                              ? 'bg-green-100 text-green-700'
+                              : 'bg-amber-100 text-amber-700'
+                          }`}
+                        >
+                          {scoreLabel(tp.problem.language, last.passed, last.total)}
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-500">
+                          ยังไม่ส่ง
+                        </span>
+                      )}
+                    </div>
+                  </Link>
+                </li>
+              )
+            })}
+          </ul>
         </div>
-
-        <Workspace
-          assignmentId={assignment.id}
-          language={assignment.problem.language}
-          starterCode={assignment.problem.starterCode ?? ''}
-          testCases={
-            assignment.problem.language === 'turtle'
-              ? []
-              : assignment.problem.testCases.map((tc) => ({
-                  input: tc.input,
-                  expectedOutput: tc.expectedOutput,
-                  isHidden: tc.isHidden,
-                }))
-          }
-          expectedDrawing={
-            assignment.problem.language === 'turtle'
-              ? (assignment.problem.testCases[0]?.expectedOutput ?? null)
-              : null
-          }
-          lastCode={lastSubmission?.code ?? null}
-          canSubmit={!overdue}
-        />
       </main>
     </div>
   )

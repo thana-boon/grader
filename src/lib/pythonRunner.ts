@@ -373,10 +373,27 @@ def __grader_run(code, stdin_text):
     return (buf.getvalue(), err, _turtle_mod._drawing_json())
 \`
 
+const loadedPackages = new Set()
+
 self.onmessage = async (e) => {
-  const { id, code, stdin } = e.data
+  const { id, code, stdin, packages, files } = e.data
   try {
     const pyodide = await pyodideReady
+    // โหลดแพ็กเกจเพิ่ม (เช่น pandas) — โหลดครั้งเดียวต่อ worker
+    if (Array.isArray(packages)) {
+      for (const p of packages) {
+        if (!loadedPackages.has(p)) {
+          await pyodide.loadPackage(p)
+          loadedPackages.add(p)
+        }
+      }
+    }
+    // เขียนไฟล์ข้อมูลแนบลง filesystem จำลอง ให้โค้ดอ่านได้เช่น pd.read_csv('data.csv')
+    if (Array.isArray(files)) {
+      for (const f of files) {
+        pyodide.FS.writeFile(f.name, new TextEncoder().encode(f.content))
+      }
+    }
     pyodide.runPython(RUNNER)
     const run = pyodide.globals.get('__grader_run')
     const result = run(code, stdin)
@@ -396,6 +413,12 @@ export type RunResult = {
   error: string | null
   timedOut: boolean
   drawing: string | null // JSON ภาพวาด turtle ({bg, events}) — events ว่างถ้าไม่ได้ใช้ turtle
+}
+
+export type RunOptions = {
+  timeoutMs?: number
+  packages?: string[] // แพ็กเกจ Pyodide ที่ต้องโหลดก่อน เช่น ['pandas']
+  files?: { name: string; content: string }[] // ไฟล์ข้อมูลแนบ
 }
 
 type Pending = { resolve: (r: RunResult) => void; timer: number }
@@ -421,12 +444,14 @@ class PythonRunner {
     return worker
   }
 
-  // โหลด Pyodide ล่วงหน้า — เรียกก่อนรันจริงเพื่อให้ timeout ของ run() ไม่นับเวลาโหลด
-  warmup(): Promise<RunResult> {
-    return this.run('pass', '', 120_000)
+  // โหลด Pyodide (และแพ็กเกจ เช่น pandas) ล่วงหน้า — เรียกก่อนรันจริง
+  // เพื่อให้ timeout ของ run() ไม่นับเวลาดาวน์โหลด
+  warmup(packages?: string[]): Promise<RunResult> {
+    return this.run('pass', '', { timeoutMs: 180_000, packages })
   }
 
-  run(code: string, stdin: string, timeoutMs = 15_000): Promise<RunResult> {
+  run(code: string, stdin: string, options: RunOptions = {}): Promise<RunResult> {
+    const { timeoutMs = 15_000, packages, files } = options
     const worker = this.ensureWorker()
     const id = ++this.seq
     return new Promise((resolve) => {
@@ -443,7 +468,7 @@ class PythonRunner {
         resolve({ ok: false, output: '', error: null, timedOut: true, drawing: null })
       }, timeoutMs)
       this.pending.set(id, { resolve, timer })
-      worker.postMessage({ id, code, stdin })
+      worker.postMessage({ id, code, stdin, packages, files })
     })
   }
 }

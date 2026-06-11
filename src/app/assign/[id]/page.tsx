@@ -8,11 +8,22 @@ import {
   findSchoolStudentsByCodesAndYear,
   type SchoolStudent,
 } from '@/lib/students'
-import { languageLabel, scoreLabel } from '@/lib/languages'
+import { languageLabel } from '@/lib/languages'
 import Navbar from '@/components/Navbar'
 import TurtleCanvas from '@/components/TurtleCanvas'
 import DeleteAssignmentButton from '../DeleteAssignmentButton'
 import { updateAssignmentDue } from '../actions'
+
+// token ไฟล์ .sb3 ใน details ของการส่งงาน scratch
+function scratchFileToken(details: string | null): string | null {
+  if (!details) return null
+  try {
+    const d = JSON.parse(details)
+    return typeof d.file === 'string' ? d.file : null
+  } catch {
+    return null
+  }
+}
 
 // ค่า default ของ input datetime-local (เวลาท้องถิ่นเครื่องเซิร์ฟเวอร์)
 function toLocalInput(d: Date): string {
@@ -22,65 +33,108 @@ function toLocalInput(d: Date): string {
 
 export default async function AssignmentDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>
+  searchParams: Promise<{ tab?: string }>
 }) {
   const user = await getCurrentUser()
   if (!user || user.role !== 'teacher') redirect('/login')
 
   const { id: idRaw } = await params
+  const { tab: tabParam } = await searchParams
   const id = parseInt(idRaw)
   if (!id) notFound()
 
-  const [assignment, years] = await Promise.all([
+  const [task, years] = await Promise.all([
     prisma.assignment.findUnique({
       where: { id },
       include: {
-        problem: { select: { id: true, title: true, language: true } },
+        problems: {
+          orderBy: { sortOrder: 'asc' },
+          include: { problem: { select: { id: true, title: true, language: true } } },
+        },
+        targets: true,
         submissions: { orderBy: { createdAt: 'desc' } },
       },
     }),
     getSchoolAcademicYears(),
   ])
-  if (!assignment) notFound()
+  if (!task) notFound()
 
-  // นักเรียนที่อยู่ในขอบเขตการมอบหมายนี้
-  let students: SchoolStudent[]
-  if (assignment.studentCode) {
-    students = await findSchoolStudentsByCodesAndYear(
-      [assignment.studentCode],
-      assignment.academicYearId
+  const problems = task.problems.map((tp) => tp.problem)
+
+  // แท็บ: ห้องละแท็บ + แท็บ "รายคน" ถ้ามี
+  const roomTargets = task.targets
+    .filter((t) => !t.studentCode)
+    .sort((a, b) =>
+      a.classLevel === b.classLevel
+        ? a.classRoom - b.classRoom
+        : a.classLevel.localeCompare(b.classLevel, 'th')
     )
-  } else {
-    const r = await getSchoolStudents({
-      yearId: assignment.academicYearId,
-      classLevel: assignment.classLevel ?? undefined,
-      classRoom: assignment.classRoom ?? undefined,
-      pageSize: 2000,
-    })
-    students = r.students
+  const indivTargets = task.targets.filter((t) => t.studentCode)
+
+  const tabs = [
+    ...roomTargets.map((t) => ({
+      key: `${t.classLevel}/${t.classRoom}`,
+      label: `${t.classLevel}/${t.classRoom}`,
+      room: t,
+    })),
+    ...(indivTargets.length > 0
+      ? [{ key: 'indiv', label: `รายคน (${indivTargets.length})`, room: null }]
+      : []),
+  ]
+  const activeTab = tabs.find((t) => t.key === tabParam) ?? tabs[0]
+
+  // นักเรียนของแท็บที่เลือก
+  let students: SchoolStudent[] = []
+  if (activeTab) {
+    if (activeTab.room) {
+      const r = await getSchoolStudents({
+        yearId: task.academicYearId,
+        classLevel: activeTab.room.classLevel,
+        classRoom: activeTab.room.classRoom,
+        pageSize: 2000,
+      })
+      students = r.students
+    } else {
+      students = await findSchoolStudentsByCodesAndYear(
+        indivTargets.map((t) => t.studentCode!),
+        task.academicYearId
+      )
+    }
   }
 
-  // ผลส่งล่าสุด + จำนวนครั้ง ต่อนักเรียน
-  const latest = new Map<string, (typeof assignment.submissions)[number]>()
-  const attempts = new Map<string, number>()
-  for (const s of assignment.submissions) {
-    if (!latest.has(s.studentCode)) latest.set(s.studentCode, s)
-    attempts.set(s.studentCode, (attempts.get(s.studentCode) ?? 0) + 1)
+  // ผลส่งล่าสุดต่อ (ข้อ, นักเรียน)
+  const latest = new Map<string, (typeof task.submissions)[number]>()
+  for (const s of task.submissions) {
+    const key = `${s.problemId}:${s.studentCode}`
+    if (!latest.has(key)) latest.set(key, s)
   }
 
-  const submittedCount = students.filter((s) => latest.has(s.student_code)).length
-  const fullScoreCount = students.filter((s) => {
-    const l = latest.get(s.student_code)
-    return l && l.passed === l.total
-  }).length
+  const fullCount = (s: SchoolStudent) =>
+    problems.filter((p) => {
+      const l = latest.get(`${p.id}:${s.student_code}`)
+      return l && l.passed === l.total
+    }).length
+  const doneCount = (s: SchoolStudent) =>
+    problems.filter((p) => latest.has(`${p.id}:${s.student_code}`)).length
+
+  const submittedStudents = students.filter((s) => doneCount(s) > 0).length
+  const allFullStudents = students.filter((s) => fullCount(s) === problems.length).length
 
   const yearTitle =
-    years.find((y) => y.id === assignment.academicYearId)?.title ??
-    `ปี id ${assignment.academicYearId}`
-  const targetLabel = assignment.studentCode
-    ? `รายคน (${assignment.classLevel}/${assignment.classRoom})`
-    : `${assignment.classLevel} ${assignment.classRoom ? `ห้อง ${assignment.classRoom}` : '(ทุกห้อง)'}`
+    years.find((y) => y.id === task.academicYearId)?.title ?? `ปี id ${task.academicYearId}`
+
+  const scoreBadge = (language: string, passed: number, total: number) => (
+    <span
+      className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+        passed === total ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'
+      }`}
+    >
+      {language === 'turtle' ? `${passed}%` : `${passed}/${total}`}
+    </span>
+  )
 
   const inputClass =
     'px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent'
@@ -88,62 +142,58 @@ export default async function AssignmentDetailPage({
   return (
     <div className="min-h-screen bg-gray-50">
       <Navbar user={user} />
-      <main className="max-w-5xl mx-auto px-4 sm:px-6 py-6">
+      <main className="max-w-6xl mx-auto px-4 sm:px-6 py-6">
         <div className="mb-6">
           <Link href="/assign" className="text-sm text-gray-500 hover:text-indigo-600">
             ← กลับหน้ามอบหมายงาน
           </Link>
           <div className="flex items-center justify-between mt-2 gap-3">
-            <h1 className="text-2xl font-bold text-gray-900 min-w-0">
-              {assignment.problem.title}
-            </h1>
-            <div className="flex items-center gap-1 shrink-0">
-              <Link
-                href={`/problems/${assignment.problem.id}`}
-                className="text-sm text-indigo-600 hover:text-indigo-800 font-medium px-3 py-1 rounded hover:bg-indigo-50 transition"
-              >
-                ดูโจทย์
-              </Link>
-              <DeleteAssignmentButton
-                id={assignment.id}
-                label={assignment.problem.title}
-                redirectTo="/assign"
-              />
+            <h1 className="text-2xl font-bold text-gray-900 min-w-0">{task.title}</h1>
+            <div className="shrink-0">
+              <DeleteAssignmentButton id={task.id} label={task.title} redirectTo="/assign" />
             </div>
           </div>
           <p className="text-gray-500 mt-1">
-            {languageLabel(assignment.problem.language)} · {targetLabel} · {yearTitle}{' '}
-            ภาคเรียนที่ {assignment.semester}
+            {problems.length} ข้อ · {yearTitle} ภาคเรียนที่ {task.semester} · สร้างเมื่อ{' '}
+            {task.createdAt.toLocaleDateString('th-TH', { dateStyle: 'medium' })}
+          </p>
+          <p className="text-sm text-gray-500 mt-1">
+            โจทย์:{' '}
+            {problems.map((p, i) => (
+              <span key={p.id}>
+                {i > 0 && ' · '}
+                <Link href={`/problems/${p.id}`} className="text-indigo-600 hover:underline">
+                  ข้อ {i + 1} {p.title}
+                </Link>
+              </span>
+            ))}
           </p>
         </div>
 
         {/* สรุป + กำหนดส่ง */}
         <div className="grid sm:grid-cols-4 gap-4 mb-6">
           <div className="bg-white rounded-xl border border-gray-200 p-4">
-            <p className="text-sm text-gray-500">นักเรียน</p>
+            <p className="text-sm text-gray-500">นักเรียน (แท็บนี้)</p>
             <p className="text-2xl font-bold text-gray-900 mt-0.5">{students.length}</p>
           </div>
           <div className="bg-white rounded-xl border border-gray-200 p-4">
-            <p className="text-sm text-gray-500">ส่งแล้ว</p>
+            <p className="text-sm text-gray-500">เริ่มทำแล้ว</p>
             <p className="text-2xl font-bold text-indigo-600 mt-0.5">
-              {submittedCount}
+              {submittedStudents}
               <span className="text-sm font-normal text-gray-400"> / {students.length}</span>
             </p>
           </div>
           <div className="bg-white rounded-xl border border-gray-200 p-4">
-            <p className="text-sm text-gray-500">ผ่านครบทุกเคส</p>
-            <p className="text-2xl font-bold text-green-600 mt-0.5">{fullScoreCount}</p>
+            <p className="text-sm text-gray-500">เต็มทุกข้อ</p>
+            <p className="text-2xl font-bold text-green-600 mt-0.5">{allFullStudents}</p>
           </div>
           <div className="bg-white rounded-xl border border-gray-200 p-4">
             <p className="text-sm text-gray-500 mb-1.5">กำหนดส่ง</p>
-            <form
-              action={updateAssignmentDue.bind(null, assignment.id)}
-              className="flex gap-2"
-            >
+            <form action={updateAssignmentDue.bind(null, task.id)} className="flex gap-2">
               <input
                 type="datetime-local"
                 name="dueAt"
-                defaultValue={assignment.dueAt ? toLocalInput(assignment.dueAt) : ''}
+                defaultValue={task.dueAt ? toLocalInput(task.dueAt) : ''}
                 className={`${inputClass} flex-1 min-w-0`}
               />
               <button
@@ -156,86 +206,132 @@ export default async function AssignmentDetailPage({
           </div>
         </div>
 
-        {/* รายชื่อ + ผลงาน */}
+        {/* แท็บห้อง */}
+        <div className="flex flex-wrap gap-1 border-b border-gray-200 mb-4">
+          {tabs.map((t) => (
+            <Link
+              key={t.key}
+              href={`/assign/${task.id}?tab=${encodeURIComponent(t.key)}`}
+              className={`px-4 py-2 text-sm font-medium rounded-t-lg border-b-2 -mb-px transition ${
+                activeTab?.key === t.key
+                  ? 'border-indigo-600 text-indigo-700 bg-white'
+                  : 'border-transparent text-gray-500 hover:text-indigo-600 hover:bg-gray-100'
+              }`}
+            >
+              {t.label}
+            </Link>
+          ))}
+        </div>
+
+        {/* ตารางคะแนน */}
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-          <div className="px-6 py-4 border-b border-gray-100">
-            <h2 className="text-base font-semibold text-gray-900">ผลการทำงานรายคน</h2>
-          </div>
           {students.length === 0 ? (
             <div className="px-6 py-10 text-center text-gray-400 text-sm">
-              ไม่พบนักเรียนในขอบเขตนี้
+              ไม่พบนักเรียนในแท็บนี้
             </div>
           ) : (
-            <ul className="divide-y divide-gray-100">
-              {students.map((s) => {
-                const l = latest.get(s.student_code)
-                const n = attempts.get(s.student_code) ?? 0
-                return (
-                  <li key={s.id} className="px-6 py-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="min-w-0 flex items-baseline gap-2">
-                        <span className="text-xs text-gray-400 w-12 shrink-0">
-                          {s.student_code}
-                        </span>
-                        <span className="text-sm font-medium text-gray-900 truncate">
-                          {s.first_name} {s.last_name}
-                        </span>
-                        <span className="text-xs text-gray-400 shrink-0">
-                          {s.class_level}/{s.class_room} เลขที่ {s.number_in_room}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-3 shrink-0">
-                        {l ? (
-                          <>
-                            <span className="text-xs text-gray-400">
-                              ส่ง {n} ครั้ง · ล่าสุด{' '}
-                              {l.createdAt.toLocaleString('th-TH', {
-                                dateStyle: 'short',
-                                timeStyle: 'short',
-                              })}
-                            </span>
-                            <span
-                              className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${
-                                l.passed === l.total
-                                  ? 'bg-green-100 text-green-700'
-                                  : 'bg-amber-100 text-amber-700'
-                              }`}
-                            >
-                              {scoreLabel(assignment.problem.language, l.passed, l.total)}
-                            </span>
-                          </>
-                        ) : (
-                          <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-500">
-                            ยังไม่ส่ง
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-gray-50 text-left text-gray-500 border-b border-gray-200">
+                    <th className="px-4 py-3 font-medium">เลขที่</th>
+                    <th className="px-4 py-3 font-medium">ชื่อ-นามสกุล</th>
+                    {problems.map((p, i) => (
+                      <th key={p.id} className="px-4 py-3 font-medium text-center" title={p.title}>
+                        ข้อ {i + 1}
+                      </th>
+                    ))}
+                    <th className="px-4 py-3 font-medium text-center">เต็ม</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {students.map((s) => {
+                    const full = fullCount(s)
+                    const hasAny = doneCount(s) > 0
+                    return (
+                      <tr key={s.id} className="hover:bg-gray-50 align-top">
+                        <td className="px-4 py-3 text-gray-500">{s.number_in_room}</td>
+                        <td className="px-4 py-3">
+                          <p className="text-gray-900 font-medium">
+                            {s.first_name} {s.last_name}
+                          </p>
+                          <p className="text-xs text-gray-400">
+                            {s.student_code}
+                            {activeTab?.room ? '' : ` · ${s.class_level}/${s.class_room}`}
+                          </p>
+                          {hasAny && (
+                            <details className="mt-1">
+                              <summary className="text-xs text-indigo-600 cursor-pointer hover:underline">
+                                ดูงานที่ส่ง
+                              </summary>
+                              <div className="mt-2 space-y-3">
+                                {problems.map((p, i) => {
+                                  const l = latest.get(`${p.id}:${s.student_code}`)
+                                  if (!l) return null
+                                  return (
+                                    <div key={p.id}>
+                                      <p className="text-xs font-medium text-gray-600 mb-1">
+                                        ข้อ {i + 1} {p.title} ({languageLabel(p.language)}) — ส่งเมื่อ{' '}
+                                        {l.createdAt.toLocaleString('th-TH', {
+                                          dateStyle: 'short',
+                                          timeStyle: 'short',
+                                        })}
+                                      </p>
+                                      {p.language === 'turtle' && (
+                                        <div className="mb-1">
+                                          <TurtleCanvas
+                                            drawing={l.details}
+                                            size={220}
+                                            emptyText="ไม่มีภาพบันทึกไว้"
+                                          />
+                                        </div>
+                                      )}
+                                      {p.language === 'scratch' &&
+                                        scratchFileToken(l.details) && (
+                                          <a
+                                            href={`/api/scratch/file?token=${scratchFileToken(l.details)}`}
+                                            className="inline-block mb-1 text-xs text-indigo-600 hover:underline"
+                                          >
+                                            ⬇ ดาวน์โหลดไฟล์ .sb3 (เปิดดูใน Scratch ได้)
+                                          </a>
+                                        )}
+                                      <pre className="bg-gray-900 text-gray-100 rounded-lg p-3 text-xs font-mono overflow-x-auto whitespace-pre-wrap max-w-xl">
+                                        {l.code}
+                                      </pre>
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            </details>
+                          )}
+                        </td>
+                        {problems.map((p) => {
+                          const l = latest.get(`${p.id}:${s.student_code}`)
+                          return (
+                            <td key={p.id} className="px-4 py-3 text-center">
+                              {l ? (
+                                scoreBadge(p.language, l.passed, l.total)
+                              ) : (
+                                <span className="text-gray-300">—</span>
+                              )}
+                            </td>
+                          )
+                        })}
+                        <td className="px-4 py-3 text-center">
+                          <span
+                            className={`text-xs font-medium ${
+                              full === problems.length ? 'text-green-600' : 'text-gray-500'
+                            }`}
+                          >
+                            {full}/{problems.length}
                           </span>
-                        )}
-                      </div>
-                    </div>
-                    {l && (
-                      <details className="mt-1.5 ml-14">
-                        <summary className="text-xs text-indigo-600 cursor-pointer hover:underline">
-                          {assignment.problem.language === 'turtle'
-                            ? 'ดูภาพและโค้ดที่ส่งล่าสุด'
-                            : 'ดูโค้ดที่ส่งล่าสุด'}
-                        </summary>
-                        {assignment.problem.language === 'turtle' && (
-                          <div className="mt-2">
-                            <TurtleCanvas
-                              drawing={l.details}
-                              size={260}
-                              emptyText="ไม่มีภาพบันทึกไว้"
-                            />
-                          </div>
-                        )}
-                        <pre className="mt-2 bg-gray-900 text-gray-100 rounded-lg p-3 text-xs font-mono overflow-x-auto whitespace-pre-wrap">
-                          {l.code}
-                        </pre>
-                      </details>
-                    )}
-                  </li>
-                )
-              })}
-            </ul>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
       </main>

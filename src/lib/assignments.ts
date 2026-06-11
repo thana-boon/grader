@@ -1,26 +1,29 @@
 import type { Prisma } from '@prisma/client'
 import type { SchoolStudent } from './students'
 
-// เงื่อนไขหา "งานของนักเรียนคนนี้" — ใช้ร่วมกันทั้ง dashboard, หน้าทำงาน และตอนส่งงาน
-// งานเข้าถึงได้เมื่อ: มอบหมายรายคนถึงรหัสนี้ หรือมอบหมายทั้งชั้น(ทุกห้อง)/ห้องที่นักเรียนอยู่
-export function assignmentTargetFilter(
+// เงื่อนไขหา "งานของนักเรียนคนนี้" — งานเข้าถึงได้เมื่อมีเป้าหมาย (target) อย่างน้อยหนึ่งแถวที่
+// มอบรายคนถึงรหัสนี้ หรือมอบทั้งห้องที่นักเรียนอยู่
+export function targetOrFilter(
   student: SchoolStudent
-): Prisma.AssignmentWhereInput[] {
+): Prisma.AssignmentTargetWhereInput[] {
   return [
     { studentCode: student.student_code },
-    { studentCode: null, classLevel: student.class_level, classRoom: null },
-    { studentCode: null, classLevel: student.class_level, classRoom: student.class_room },
+    {
+      studentCode: null,
+      classLevel: student.class_level,
+      classRoom: student.class_room,
+    },
   ]
 }
 
-// เช็คเงื่อนไขเดียวกันกับ assignmentTargetFilter แบบรายตัว (ใช้ตอนเปิดหน้างาน/ส่งงาน)
-export function assignmentMatchesStudent(
-  assignment: { studentCode: string | null; classLevel: string | null; classRoom: number | null },
+// เช็คเงื่อนไขเดียวกันแบบรายตัว (ใช้ตอนเปิดหน้างาน/ส่งงาน)
+export function targetsMatchStudent(
+  targets: { studentCode: string | null; classLevel: string; classRoom: number }[],
   student: SchoolStudent
 ): boolean {
-  if (assignment.studentCode) return assignment.studentCode === student.student_code
-  return (
-    assignment.classLevel === student.class_level &&
-    (assignment.classRoom === null || assignment.classRoom === student.class_room)
+  return targets.some((t) =>
+    t.studentCode
+      ? t.studentCode === student.student_code
+      : t.classLevel === student.class_level && t.classRoom === student.class_room
   )
 }

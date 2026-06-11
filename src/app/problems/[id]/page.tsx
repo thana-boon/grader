@@ -66,6 +66,8 @@ export default async function EditProblemPage({
               problem.language === 'turtle'
                 ? problem.testCases[0]?.expectedOutput
                 : undefined,
+            datasetName: problem.datasetName ?? undefined,
+            datasetContent: problem.datasetContent ?? undefined,
           }}
           submitLabel="บันทึกการแก้ไข"
         />

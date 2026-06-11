@@ -4,7 +4,7 @@ import { prisma } from '@/lib/prisma'
 import { getCurrentUser } from '@/lib/auth'
 import { getActiveSetting } from '@/lib/academicYear'
 import { findSchoolStudentByCodeAndYear } from '@/lib/students'
-import { assignmentMatchesStudent } from '@/lib/assignments'
+import { targetsMatchStudent } from '@/lib/assignments'
 import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
 
@@ -17,12 +17,20 @@ export type SubmitResult = {
 // ผลตรวจ turtle — % ความเหมือนของภาพ + ภาพที่นักเรียนวาด (เก็บให้ครูดู)
 export type TurtleResult = { percent: number; drawing: string | null }
 
+// ผลตรวจ scratch — ผ่าน/ไม่ผ่านรายเกณฑ์ + token ไฟล์ .sb3 ที่อัปโหลดไว้ + สถิติ
+export type ScratchResult = {
+  flags: boolean[]
+  fileToken: string | null
+  stats?: { spriteCount: number; totalBlocks: number }
+}
+
 // รับผลตรวจจากเบราว์เซอร์นักเรียน (ตรวจด้วย Pyodide ฝั่ง client ตามที่ออกแบบ)
 // server ตรวจสิทธิ์/เงื่อนไขซ้ำทั้งหมด ยกเว้นผลรันโค้ดซึ่งต้องเชื่อ client
 export async function submitAssignment(
   assignmentId: number,
+  problemId: number,
   code: string,
-  results: boolean[] | TurtleResult
+  results: boolean[] | TurtleResult | ScratchResult
 ): Promise<SubmitResult> {
   const user = await getCurrentUser()
   if (!user || user.role !== 'student') redirect('/login')
@@ -33,17 +41,18 @@ export async function submitAssignment(
   const active = await getActiveSetting()
   if (!active) return { error: 'ระบบยังไม่ได้ตั้งปีการศึกษาที่ใช้งาน' }
 
-  const assignment = await prisma.assignment.findUnique({
-    where: { id: assignmentId },
+  // โจทย์ข้อนี้ต้องอยู่ในงานนี้จริง
+  const taskProblem = await prisma.assignmentProblem.findUnique({
+    where: { assignmentId_problemId: { assignmentId, problemId } },
     include: {
-      problem: { select: { id: true, language: true, testCases: { select: { id: true } } } },
+      assignment: { include: { targets: true } },
+      problem: { select: { language: true, testCases: { select: { id: true } } } },
     },
   })
-  if (!assignment) return { error: 'ไม่พบงานนี้' }
-  if (
-    assignment.academicYearId !== active.academicYearId ||
-    assignment.semester !== active.semester
-  ) {
+  if (!taskProblem) return { error: 'ไม่พบโจทย์ข้อนี้ในงาน' }
+
+  const task = taskProblem.assignment
+  if (task.academicYearId !== active.academicYearId || task.semester !== active.semester) {
     return { error: 'งานนี้ไม่อยู่ในภาคเรียนปัจจุบัน' }
   }
 
@@ -52,10 +61,10 @@ export async function submitAssignment(
     active.academicYearId
   )
   if (!student) return { error: 'ไม่พบข้อมูลนักเรียนในปีการศึกษานี้' }
-  if (!assignmentMatchesStudent(assignment, student)) {
+  if (!targetsMatchStudent(task.targets, student)) {
     return { error: 'งานนี้ไม่ได้มอบหมายให้คุณ' }
   }
-  if (assignment.dueAt && new Date() > assignment.dueAt) {
+  if (task.dueAt && new Date() > task.dueAt) {
     return { error: 'เลยกำหนดส่งแล้ว ไม่สามารถส่งงานได้' }
   }
 
@@ -63,9 +72,25 @@ export async function submitAssignment(
   let total: number
   let details: string | null
 
-  if (assignment.problem.language === 'turtle') {
+  if (taskProblem.problem.language === 'scratch') {
+    // scratch: ผ่าน/ไม่ผ่านรายเกณฑ์ + เก็บ token ไฟล์ .sb3 ไว้ให้ครูดาวน์โหลด
+    if (Array.isArray(results) || !('flags' in results) || !Array.isArray(results.flags)) {
+      return { error: 'ผลการตรวจไม่ถูกต้อง กรุณากดส่งใหม่' }
+    }
+    total = taskProblem.problem.testCases.length
+    if (results.flags.length !== total || results.flags.some((f) => typeof f !== 'boolean')) {
+      return { error: 'ผลการตรวจไม่ถูกต้อง กรุณากดส่งใหม่' }
+    }
+    const { SCRATCH_TOKEN_PATTERN } = await import('@/lib/scratchStorage')
+    const fileToken =
+      typeof results.fileToken === 'string' && SCRATCH_TOKEN_PATTERN.test(results.fileToken)
+        ? results.fileToken
+        : null
+    passed = results.flags.filter(Boolean).length
+    details = JSON.stringify({ file: fileToken, flags: results.flags, stats: results.stats ?? null })
+  } else if (taskProblem.problem.language === 'turtle') {
     // turtle: คะแนน = % ความเหมือนของภาพ (0-100), details = ภาพที่นักเรียนวาด
-    if (Array.isArray(results) || typeof results?.percent !== 'number') {
+    if (Array.isArray(results) || !('percent' in results) || typeof results.percent !== 'number') {
       return { error: 'ผลการตรวจไม่ถูกต้อง กรุณากดส่งใหม่' }
     }
     passed = Math.max(0, Math.min(100, Math.round(results.percent)))
@@ -75,7 +100,7 @@ export async function submitAssignment(
         ? results.drawing
         : null
   } else {
-    total = assignment.problem.testCases.length
+    total = taskProblem.problem.testCases.length
     if (
       !Array.isArray(results) ||
       results.length !== total ||
@@ -90,6 +115,7 @@ export async function submitAssignment(
   await prisma.submission.create({
     data: {
       assignmentId,
+      problemId,
       studentCode: student.student_code,
       code,
       passed,

@@ -42,13 +42,16 @@ model Problem {
   language    String   @default("python") // python (อนาคต: pandas, html, php, scratch)
   starterCode  String? @map("starter_code") @db.Text
   solutionCode String? @map("solution_code") @db.Text // เฉลยของครู — ใช้สร้าง output อัตโนมัติ + อ้างอิง (ไม่ส่งให้นักเรียน)
+  datasetName    String? @map("dataset_name") // ชื่อไฟล์ข้อมูลแนบ เช่น data.csv (pandas)
+  datasetContent String? @map("dataset_content") @db.MediumText // เนื้อหาไฟล์ — เขียนลง FS ของ Pyodide ก่อนรัน
   createdById  Int     @map("created_by_id")
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  createdBy   Teacher      @relation(fields: [createdById], references: [id])
+  createdBy   Teacher             @relation(fields: [createdById], references: [id])
   testCases   TestCase[]
-  assignments Assignment[]
+  assignments AssignmentProblem[] // งานที่มีโจทย์ข้อนี้
+  submissions Submission[]
 
   @@map("problems")
 }
@@ -67,40 +70,67 @@ model TestCase {
   @@map("test_cases")
 }
 
-// การมอบหมายโจทย์ ในปี/เทอมหนึ่ง — มอบทั้งห้อง (classLevel/classRoom) หรือรายคน (studentCode)
+// งานที่มอบหมาย เช่น "แบบฝึกหัดครั้งที่ 1" — มีได้หลายโจทย์ หลายเป้าหมาย ในปี/เทอมหนึ่ง
 // academicYearId อ้างถึง school_app.academic_years.id (คนละ DB — ไม่มี FK)
 model Assignment {
   id             Int       @id @default(autoincrement())
-  problemId      Int       @map("problem_id")
+  title          String
   academicYearId Int       @map("academic_year_id")
   semester       Int
-  classLevel     String?   @map("class_level") // เช่น "ม.1" (ใส่เสมอ — รายคนใช้แสดงผล)
-  classRoom      Int?      @map("class_room") // null + ไม่มี studentCode = ทุกห้องในชั้น
-  studentCode    String?   @map("student_code") // ใส่ = มอบหมายรายคน
   dueAt          DateTime? @map("due_at")
   createdAt      DateTime  @default(now())
 
-  problem     Problem      @relation(fields: [problemId], references: [id], onDelete: Cascade)
+  problems    AssignmentProblem[]
+  targets     AssignmentTarget[]
   submissions Submission[]
 
   @@map("assignments")
 }
 
-// การส่งงานของนักเรียน — ตรวจในเบราว์เซอร์แล้วบันทึกผล
+// โจทย์ในงาน — sortOrder คือลำดับข้อ (ข้อ 1, 2, 3...)
+model AssignmentProblem {
+  id           Int @id @default(autoincrement())
+  assignmentId Int @map("assignment_id")
+  problemId    Int @map("problem_id")
+  sortOrder    Int @default(0) @map("sort_order")
+
+  assignment Assignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  problem    Problem    @relation(fields: [problemId], references: [id], onDelete: Cascade)
+
+  @@unique([assignmentId, problemId])
+  @@map("assignment_problems")
+}
+
+// เป้าหมายของงาน — แถวละห้อง (classLevel+classRoom) หรือรายคน (studentCode พร้อมชั้น/ห้องไว้แสดงผล)
+model AssignmentTarget {
+  id           Int     @id @default(autoincrement())
+  assignmentId Int     @map("assignment_id")
+  classLevel   String  @map("class_level")
+  classRoom    Int     @map("class_room")
+  studentCode  String? @map("student_code") // null = ทั้งห้อง
+
+  assignment Assignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+
+  @@map("assignment_targets")
+}
+
+// การส่งงานของนักเรียน — ตรวจในเบราว์เซอร์แล้วบันทึกผลรายข้อ
 // studentCode เก็บตามรูปแบบใน school_app.students (ไม่เติม 0 นำหน้า)
 model Submission {
   id           Int      @id @default(autoincrement())
   assignmentId Int      @map("assignment_id")
+  problemId    Int      @map("problem_id")
   studentCode  String   @map("student_code")
   code         String   @db.Text
-  passed       Int // จำนวนเคสที่ผ่าน
-  total        Int // จำนวนเคสทั้งหมดตอนส่ง
+  passed       Int // จำนวนเคสที่ผ่าน (turtle: % ความเหมือน)
+  total        Int // จำนวนเคสทั้งหมดตอนส่ง (turtle: 100)
   details      String?  @db.MediumText // JSON ผลรายเคส [true,false] หรือ JSON ภาพวาดของนักเรียน (turtle)
   createdAt    DateTime @default(now())
 
   assignment Assignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  problem    Problem    @relation(fields: [problemId], references: [id], onDelete: Cascade)
 
-  @@index([assignmentId, studentCode])
+  @@index([assignmentId, problemId, studentCode])
   @@map("submissions")
 }
 

@@ -1,12 +1,9 @@
 import type { Metadata } from 'next'
-import { Sarabun } from 'next/font/google'
 import './globals.css'
 
-const sarabun = Sarabun({
-  weight: ['300', '400', '500', '600', '700'],
-  subsets: ['latin', 'thai'],
-  display: 'swap',
-})
+// ฟอนต์ Sarabun ประกาศใน globals.css ชี้ไฟล์ใน public/fonts (self-host)
+// — เลิกใช้ next/font/google เพราะมันดาวน์โหลดจากเน็ตตอน compile
+// ถ้าเน็ตล่มจะทำให้ CSS ทั้งหน้าพัง (Tailwind ตั้ง font-sans เป็น Sarabun อยู่แล้ว)
 
 export const metadata: Metadata = {
   title: 'CodeGrader',
@@ -20,7 +17,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="th">
-      <body className={`${sarabun.className} antialiased`}>{children}</body>
+      <body className="antialiased">{children}</body>
     </html>
   )
 }

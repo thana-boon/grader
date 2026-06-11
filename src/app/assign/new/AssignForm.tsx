@@ -1,7 +1,10 @@
 'use client'
 
 import { useActionState, useEffect, useState } from 'react'
-import { createAssignments, type ActionResult } from '../actions'
+import { createTask, type ActionResult } from '../actions'
+import { languageLabel } from '@/lib/languages'
+
+type ProblemOption = { id: number; title: string; language: string }
 
 type StudentOption = {
   code: string
@@ -11,35 +14,59 @@ type StudentOption = {
   number: number
 }
 
+type SelectedStudent = { code: string; name: string; level: string; room: number }
+
 export default function AssignForm({
   problems,
   classLevels,
   classRooms,
-  defaultProblemId,
 }: {
-  problems: { id: number; title: string }[]
+  problems: ProblemOption[]
   classLevels: string[]
   classRooms: number[]
-  defaultProblemId?: number
 }) {
   const [state, formAction, pending] = useActionState<ActionResult, FormData>(
-    createAssignments,
+    createTask,
     {}
   )
-  const [mode, setMode] = useState<'room' | 'student'>('room')
+
+  // โจทย์ — เก็บเป็น array ตามลำดับที่เลือก (= ลำดับข้อในงาน)
+  const [selectedProblems, setSelectedProblems] = useState<number[]>([])
+  const toggleProblem = (id: number) =>
+    setSelectedProblems((prev) =>
+      prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id]
+    )
+
+  // เป้าหมาย: ห้อง (key = "level|room") และรายคน
+  const [roomTargets, setRoomTargets] = useState<Set<string>>(new Set())
+  const [studentTargets, setStudentTargets] = useState<Map<string, SelectedStudent>>(
+    new Map()
+  )
+
+  // ตัวเลือกห้องของชั้นที่กำลังดู
   const [level, setLevel] = useState(classLevels[0] ?? '')
-  const [room, setRoom] = useState('')
+  const toggleRoom = (room: number) => {
+    const key = `${level}|${room}`
+    setRoomTargets((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  // ตัวเลือกนักเรียนรายคน
+  const [pickLevel, setPickLevel] = useState(classLevels[0] ?? '')
+  const [pickRoom, setPickRoom] = useState('')
   const [students, setStudents] = useState<StudentOption[]>([])
   const [loadingStudents, setLoadingStudents] = useState(false)
-  const [selected, setSelected] = useState<Set<string>>(new Set())
 
-  // โหมดรายคน: โหลดรายชื่อนักเรียนเมื่อเปลี่ยนชั้น/ห้อง
   useEffect(() => {
-    if (mode !== 'student' || !level) return
+    if (!pickLevel) return
     let cancelled = false
     setLoadingStudents(true)
-    const params = new URLSearchParams({ level })
-    if (room) params.set('room', room)
+    const params = new URLSearchParams({ level: pickLevel })
+    if (pickRoom) params.set('room', pickRoom)
     fetch(`/api/students?${params}`)
       .then((r) => r.json())
       .then((d) => {
@@ -54,15 +81,23 @@ export default function AssignForm({
     return () => {
       cancelled = true
     }
-  }, [mode, level, room])
+  }, [pickLevel, pickRoom])
 
-  const toggleStudent = (code: string) =>
-    setSelected((prev) => {
-      const next = new Set(prev)
-      if (next.has(code)) next.delete(code)
-      else next.add(code)
+  const toggleStudent = (s: StudentOption) =>
+    setStudentTargets((prev) => {
+      const next = new Map(prev)
+      if (next.has(s.code)) next.delete(s.code)
+      else next.set(s.code, { code: s.code, name: s.name, level: s.classLevel, room: s.classRoom })
       return next
     })
+
+  const targetsJson = JSON.stringify([
+    ...[...roomTargets].map((key) => {
+      const [lv, room] = key.split('|')
+      return { type: 'room', level: lv, room: Number(room) }
+    }),
+    ...[...studentTargets.keys()].map((code) => ({ type: 'student', code })),
+  ])
 
   const inputClass =
     'px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent'
@@ -75,64 +110,80 @@ export default function AssignForm({
         </div>
       )}
 
-      <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-5">
-        {/* เลือกโจทย์ */}
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">โจทย์</label>
-          <select
-            name="problemId"
-            required
-            defaultValue={defaultProblemId ?? ''}
-            className={`${inputClass} w-full`}
-          >
-            <option value="" disabled>
-              — เลือกโจทย์ —
-            </option>
-            {problems.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.title}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        {/* รูปแบบการมอบหมาย */}
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            มอบหมายให้
-          </label>
-          <div className="flex gap-4">
-            <label className="flex items-center gap-2 text-sm text-gray-700">
-              <input
-                type="radio"
-                name="mode"
-                value="room"
-                checked={mode === 'room'}
-                onChange={() => setMode('room')}
-                className="w-4 h-4 text-indigo-600 focus:ring-indigo-500"
-              />
-              ทั้งห้อง / ทั้งชั้น
+      {/* ชื่องาน + กำหนดส่ง */}
+      <div className="bg-white rounded-xl border border-gray-200 p-6">
+        <div className="flex flex-wrap gap-3">
+          <div className="flex-1 min-w-64">
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              ชื่องาน
             </label>
-            <label className="flex items-center gap-2 text-sm text-gray-700">
-              <input
-                type="radio"
-                name="mode"
-                value="student"
-                checked={mode === 'student'}
-                onChange={() => setMode('student')}
-                className="w-4 h-4 text-indigo-600 focus:ring-indigo-500"
-              />
-              รายคน
+            <input
+              type="text"
+              name="title"
+              required
+              placeholder='เช่น "แบบฝึกหัดครั้งที่ 1"'
+              className={`${inputClass} w-full`}
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              กำหนดส่ง (ไม่บังคับ)
             </label>
+            <input type="datetime-local" name="dueAt" className={inputClass} />
           </div>
         </div>
+      </div>
 
-        {/* เลือกชั้น/ห้อง */}
-        <div className="flex flex-wrap gap-3">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">ชั้น</label>
+      {/* เลือกโจทย์ */}
+      <div className="bg-white rounded-xl border border-gray-200 p-6">
+        <h2 className="text-base font-semibold text-gray-900 mb-1">
+          เลือกโจทย์ ({selectedProblems.length} ข้อ)
+        </h2>
+        <p className="text-xs text-gray-400 mb-3">
+          เลือกได้หลายข้อ — ลำดับที่เลือกคือลำดับข้อในงาน
+        </p>
+        {problems.length === 0 ? (
+          <p className="text-sm text-gray-400">ยังไม่มีโจทย์ในคลัง</p>
+        ) : (
+          <div className="border border-gray-200 rounded-lg max-h-64 overflow-y-auto divide-y divide-gray-100">
+            {problems.map((p) => {
+              const order = selectedProblems.indexOf(p.id)
+              return (
+                <label
+                  key={p.id}
+                  className="flex items-center gap-3 px-4 py-2.5 text-sm hover:bg-gray-50 cursor-pointer"
+                >
+                  <input
+                    type="checkbox"
+                    checked={order >= 0}
+                    onChange={() => toggleProblem(p.id)}
+                    className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                  />
+                  <span className="w-10 shrink-0 text-xs font-semibold text-indigo-600">
+                    {order >= 0 ? `ข้อ ${order + 1}` : ''}
+                  </span>
+                  <span className="text-gray-900 flex-1">{p.title}</span>
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700 shrink-0">
+                    {languageLabel(p.language)}
+                  </span>
+                </label>
+              )
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* เป้าหมาย */}
+      <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-5">
+        <h2 className="text-base font-semibold text-gray-900">
+          มอบหมายให้ ({roomTargets.size + studentTargets.size} รายการ)
+        </h2>
+
+        {/* ทั้งห้อง — เลือกได้หลายห้อง */}
+        <div>
+          <p className="text-sm font-medium text-gray-700 mb-2">แบบทั้งห้อง</p>
+          <div className="flex flex-wrap items-center gap-3">
             <select
-              name="classLevel"
               value={level}
               onChange={(e) => setLevel(e.target.value)}
               className={inputClass}
@@ -143,16 +194,55 @@ export default function AssignForm({
                 </option>
               ))}
             </select>
+            <div className="flex flex-wrap gap-2">
+              {classRooms.map((r) => {
+                const checked = roomTargets.has(`${level}|${r}`)
+                return (
+                  <label
+                    key={r}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-sm cursor-pointer transition ${
+                      checked
+                        ? 'border-indigo-400 bg-indigo-50 text-indigo-700'
+                        : 'border-gray-300 text-gray-600 hover:bg-gray-50'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleRoom(r)}
+                      className="w-3.5 h-3.5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                    />
+                    ห้อง {r}
+                  </label>
+                )
+              })}
+            </div>
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">ห้อง</label>
+        </div>
+
+        {/* รายคน */}
+        <div>
+          <p className="text-sm font-medium text-gray-700 mb-2">
+            แบบรายคน (เลือกเพิ่มจากห้องที่มอบทั้งห้องได้)
+          </p>
+          <div className="flex flex-wrap gap-3 mb-2">
             <select
-              name="classRoom"
-              value={room}
-              onChange={(e) => setRoom(e.target.value)}
+              value={pickLevel}
+              onChange={(e) => setPickLevel(e.target.value)}
               className={inputClass}
             >
-              <option value="">{mode === 'room' ? 'ทุกห้อง' : 'ทุกห้อง (แสดงทั้งชั้น)'}</option>
+              {classLevels.map((lv) => (
+                <option key={lv} value={lv}>
+                  {lv}
+                </option>
+              ))}
+            </select>
+            <select
+              value={pickRoom}
+              onChange={(e) => setPickRoom(e.target.value)}
+              className={inputClass}
+            >
+              <option value="">ทุกห้อง</option>
               {classRooms.map((r) => (
                 <option key={r} value={r}>
                   ห้อง {r}
@@ -160,72 +250,92 @@ export default function AssignForm({
               ))}
             </select>
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              กำหนดส่ง (ไม่บังคับ)
-            </label>
-            <input type="datetime-local" name="dueAt" className={inputClass} />
+          <div className="border border-gray-200 rounded-lg max-h-56 overflow-y-auto divide-y divide-gray-100">
+            {loadingStudents ? (
+              <p className="px-4 py-5 text-center text-sm text-gray-400">
+                กำลังโหลดรายชื่อ...
+              </p>
+            ) : students.length === 0 ? (
+              <p className="px-4 py-5 text-center text-sm text-gray-400">
+                ไม่พบนักเรียนในชั้น/ห้องนี้
+              </p>
+            ) : (
+              students.map((s) => (
+                <label
+                  key={s.code}
+                  className="flex items-center gap-3 px-4 py-2 text-sm hover:bg-gray-50 cursor-pointer"
+                >
+                  <input
+                    type="checkbox"
+                    checked={studentTargets.has(s.code)}
+                    onChange={() => toggleStudent(s)}
+                    className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                  />
+                  <span className="text-gray-400 w-14 shrink-0">{s.code}</span>
+                  <span className="text-gray-900 flex-1">{s.name}</span>
+                  <span className="text-gray-400 text-xs shrink-0">
+                    {s.classLevel}/{s.classRoom} เลขที่ {s.number}
+                  </span>
+                </label>
+              ))
+            )}
           </div>
         </div>
 
-        {/* รายชื่อนักเรียน (โหมดรายคน) */}
-        {mode === 'student' && (
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <label className="text-sm font-medium text-gray-700">
-                เลือกนักเรียน ({selected.size} คน)
-              </label>
-              {students.length > 0 && (
+        {/* สรุปเป้าหมายที่เลือก */}
+        {(roomTargets.size > 0 || studentTargets.size > 0) && (
+          <div className="flex flex-wrap gap-2">
+            {[...roomTargets].sort().map((key) => {
+              const [lv, room] = key.split('|')
+              return (
+                <span
+                  key={key}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-indigo-100 text-indigo-700"
+                >
+                  {lv}/{room} (ทั้งห้อง)
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setRoomTargets((prev) => {
+                        const next = new Set(prev)
+                        next.delete(key)
+                        return next
+                      })
+                    }
+                    className="hover:text-indigo-900"
+                  >
+                    ✕
+                  </button>
+                </span>
+              )
+            })}
+            {[...studentTargets.values()].map((s) => (
+              <span
+                key={s.code}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700"
+              >
+                {s.name} ({s.level}/{s.room})
                 <button
                   type="button"
                   onClick={() =>
-                    setSelected((prev) =>
-                      prev.size === students.length
-                        ? new Set()
-                        : new Set(students.map((s) => s.code))
-                    )
+                    setStudentTargets((prev) => {
+                      const next = new Map(prev)
+                      next.delete(s.code)
+                      return next
+                    })
                   }
-                  className="text-xs text-indigo-600 hover:underline"
+                  className="hover:text-emerald-900"
                 >
-                  {selected.size === students.length ? 'ยกเลิกทั้งหมด' : 'เลือกทั้งหมด'}
+                  ✕
                 </button>
-              )}
-            </div>
-            <div className="border border-gray-200 rounded-lg max-h-72 overflow-y-auto divide-y divide-gray-100">
-              {loadingStudents ? (
-                <p className="px-4 py-6 text-center text-sm text-gray-400">
-                  กำลังโหลดรายชื่อ...
-                </p>
-              ) : students.length === 0 ? (
-                <p className="px-4 py-6 text-center text-sm text-gray-400">
-                  ไม่พบนักเรียนในชั้น/ห้องนี้
-                </p>
-              ) : (
-                students.map((s) => (
-                  <label
-                    key={s.code}
-                    className="flex items-center gap-3 px-4 py-2 text-sm hover:bg-gray-50 cursor-pointer"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={selected.has(s.code)}
-                      onChange={() => toggleStudent(s.code)}
-                      className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
-                    />
-                    <span className="text-gray-400 w-14 shrink-0">{s.code}</span>
-                    <span className="text-gray-900 flex-1">{s.name}</span>
-                    <span className="text-gray-400 text-xs shrink-0">
-                      {s.classLevel}/{s.classRoom} เลขที่ {s.number}
-                    </span>
-                  </label>
-                ))
-              )}
-            </div>
+              </span>
+            ))}
           </div>
         )}
       </div>
 
-      <input type="hidden" name="studentCodes" value={JSON.stringify([...selected])} />
+      <input type="hidden" name="problemIds" value={JSON.stringify(selectedProblems)} />
+      <input type="hidden" name="targets" value={targetsJson} />
 
       <div className="flex justify-end">
         <button

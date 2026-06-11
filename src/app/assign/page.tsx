@@ -3,7 +3,6 @@ import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { prisma } from '@/lib/prisma'
 import { getSchoolAcademicYears, getActiveSetting } from '@/lib/academicYear'
-import { findSchoolStudentsByCodesAndYear } from '@/lib/students'
 import Navbar from '@/components/Navbar'
 import DeleteAssignmentButton from './DeleteAssignmentButton'
 
@@ -11,11 +10,11 @@ export default async function AssignListPage() {
   const user = await getCurrentUser()
   if (!user || user.role !== 'teacher') redirect('/login')
 
-  const [assignments, years, active] = await Promise.all([
+  const [tasks, years, active] = await Promise.all([
     prisma.assignment.findMany({
       include: {
-        problem: { select: { title: true } },
-        _count: { select: { submissions: true } },
+        targets: true,
+        _count: { select: { problems: true, submissions: true } },
       },
       orderBy: { createdAt: 'desc' },
     }),
@@ -23,30 +22,17 @@ export default async function AssignListPage() {
     getActiveSetting(),
   ])
 
-  // ชื่อนักเรียนของรายการมอบหมายรายคน — ดึงครั้งเดียวต่อปี
-  const codesByYear = new Map<number, Set<string>>()
-  for (const a of assignments) {
-    if (!a.studentCode) continue
-    if (!codesByYear.has(a.academicYearId)) codesByYear.set(a.academicYearId, new Set())
-    codesByYear.get(a.academicYearId)!.add(a.studentCode)
-  }
-  const nameMap = new Map<string, string>()
-  for (const [yearId, codes] of codesByYear) {
-    const students = await findSchoolStudentsByCodesAndYear([...codes], yearId)
-    for (const s of students) {
-      nameMap.set(`${yearId}:${s.student_code}`, `${s.first_name} ${s.last_name}`)
-    }
-  }
-
   const yearTitle = (yearId: number) =>
     years.find((y) => y.id === yearId)?.title ?? `ปี id ${yearId}`
 
-  const targetLabel = (a: (typeof assignments)[number]) => {
-    if (a.studentCode) {
-      const name = nameMap.get(`${a.academicYearId}:${a.studentCode}`)
-      return `รายคน: ${name ?? a.studentCode} (${a.classLevel}/${a.classRoom})`
-    }
-    return `${a.classLevel} ${a.classRoom ? `ห้อง ${a.classRoom}` : '(ทุกห้อง)'}`
+  const targetSummary = (targets: (typeof tasks)[number]['targets']) => {
+    const rooms = targets
+      .filter((t) => !t.studentCode)
+      .map((t) => `${t.classLevel}/${t.classRoom}`)
+    const indiv = targets.filter((t) => t.studentCode).length
+    const parts = [...rooms]
+    if (indiv > 0) parts.push(`รายคน ${indiv} คน`)
+    return parts.join(', ') || '—'
   }
 
   return (
@@ -70,49 +56,52 @@ export default async function AssignListPage() {
         </div>
 
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-          {assignments.length === 0 ? (
+          {tasks.length === 0 ? (
             <div className="px-6 py-12 text-center">
-              <p className="text-gray-400 font-medium">ยังไม่มีการมอบหมายงาน</p>
+              <p className="text-gray-400 font-medium">ยังไม่มีงานที่มอบหมาย</p>
               <p className="text-gray-300 text-sm mt-1">
-                กด &quot;มอบหมายงานใหม่&quot; เพื่อมอบโจทย์ให้นักเรียน
+                กด &quot;มอบหมายงานใหม่&quot; เพื่อสร้างงานชุดแรก
               </p>
             </div>
           ) : (
             <ul className="divide-y divide-gray-100">
-              {assignments.map((a) => (
+              {tasks.map((t) => (
                 <li
-                  key={a.id}
+                  key={t.id}
                   className="flex items-center justify-between px-6 py-4 hover:bg-gray-50"
                 >
                   <div className="min-w-0">
-                    <Link
-                      href={`/assign/${a.id}`}
-                      className="text-sm font-medium text-gray-900 hover:text-indigo-600"
-                    >
-                      {a.problem.title}
-                    </Link>
+                    <div className="flex items-center gap-2">
+                      <Link
+                        href={`/assign/${t.id}`}
+                        className="text-sm font-medium text-gray-900 hover:text-indigo-600"
+                      >
+                        {t.title}
+                      </Link>
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-700 shrink-0">
+                        {t._count.problems} ข้อ
+                      </span>
+                    </div>
                     <p className="text-xs text-gray-500 mt-0.5">
-                      {targetLabel(a)} · {yearTitle(a.academicYearId)} ภาคเรียนที่{' '}
-                      {a.semester}
-                      {a.dueAt &&
-                        ` · กำหนดส่ง ${a.dueAt.toLocaleString('th-TH', {
+                      {targetSummary(t.targets)} · {yearTitle(t.academicYearId)}{' '}
+                      ภาคเรียนที่ {t.semester} · สร้างเมื่อ{' '}
+                      {t.createdAt.toLocaleDateString('th-TH', { dateStyle: 'medium' })}
+                      {t.dueAt &&
+                        ` · กำหนดส่ง ${t.dueAt.toLocaleString('th-TH', {
                           dateStyle: 'medium',
                           timeStyle: 'short',
                         })}`}
-                      {' · '}การส่ง {a._count.submissions} ครั้ง
+                      {' · '}การส่ง {t._count.submissions} ครั้ง
                     </p>
                   </div>
                   <div className="flex items-center gap-1 shrink-0 ml-3">
                     <Link
-                      href={`/assign/${a.id}`}
+                      href={`/assign/${t.id}`}
                       className="text-sm text-indigo-600 hover:text-indigo-800 font-medium px-3 py-1 rounded hover:bg-indigo-50 transition"
                     >
-                      ดูผลงาน
+                      ตรวจงาน
                     </Link>
-                    <DeleteAssignmentButton
-                      id={a.id}
-                      label={`${a.problem.title} → ${targetLabel(a)}`}
-                    />
+                    <DeleteAssignmentButton id={t.id} label={t.title} />
                   </div>
                 </li>
               ))}
