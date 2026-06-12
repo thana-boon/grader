@@ -6,8 +6,10 @@ import { getActiveSetting } from '@/lib/academicYear'
 import { findSchoolStudentByCodeAndYear } from '@/lib/students'
 import { targetsMatchStudent } from '@/lib/assignments'
 import { languageLabel, scoreLabel } from '@/lib/languages'
+import { bestScore, formatScore } from '@/lib/scoring'
 import Navbar from '@/components/Navbar'
 import Workspace from '../Workspace'
+import { submitAssignment } from '../../actions'
 
 export default async function ProblemWorkspacePage({
   params,
@@ -58,15 +60,20 @@ export default async function ProblemWorkspacePage({
   const problemNumber =
     task.problems.findIndex((p) => p.problemId === problemId) + 1
 
-  const lastSubmission = await prisma.submission.findFirst({
+  // การส่งทุกครั้งของข้อนี้ เรียงเก่า→ใหม่ — ใช้นับครั้งและคิดคะแนนครั้งที่ดีที่สุด
+  const submissions = await prisma.submission.findMany({
     where: { assignmentId: id, problemId, studentCode: student.student_code },
-    orderBy: { createdAt: 'desc' },
+    orderBy: { createdAt: 'asc' },
   })
+  const lastSubmission = submissions.at(-1) ?? null
+  const policy = { freeAttempts: task.freeAttempts, penaltyPercent: task.penaltyPercent }
+  const myScore =
+    submissions.length > 0 ? bestScore(submissions, taskProblem.points, policy) : null
 
   const overdue = task.dueAt !== null && new Date() > task.dueAt
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-page">
       <Navbar user={user} />
       <main className="max-w-5xl mx-auto px-4 sm:px-6 py-6">
         <div className="mb-5">
@@ -83,14 +90,19 @@ export default async function ProblemWorkspacePage({
             <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
               {languageLabel(problem.language)}
             </span>
+            <span
+              className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                myScore !== null && myScore >= taskProblem.points
+                  ? 'bg-green-100 text-green-700'
+                  : myScore !== null
+                    ? 'bg-amber-100 text-amber-700'
+                    : 'bg-gray-100 text-gray-600'
+              }`}
+            >
+              คะแนน {myScore !== null ? formatScore(myScore) : '—'}/{taskProblem.points}
+            </span>
             {lastSubmission && (
-              <span
-                className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
-                  lastSubmission.passed === lastSubmission.total
-                    ? 'bg-green-100 text-green-700'
-                    : 'bg-amber-100 text-amber-700'
-                }`}
-              >
+              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
                 ส่งล่าสุด:{' '}
                 {scoreLabel(problem.language, lastSubmission.passed, lastSubmission.total)}
               </span>
@@ -107,14 +119,13 @@ export default async function ProblemWorkspacePage({
         </div>
 
         {/* คำสั่งโจทย์ */}
-        <div className="bg-white rounded-xl border border-gray-200 p-5 mb-4">
+        <div className="bg-white rounded-2xl border border-indigo-100 shadow-sm p-5 mb-4">
           <h2 className="text-base font-semibold text-gray-900 mb-2">คำสั่ง</h2>
           <p className="text-sm text-gray-700 whitespace-pre-wrap">{problem.description}</p>
         </div>
 
         <Workspace
-          assignmentId={task.id}
-          problemId={problem.id}
+          onSubmit={submitAssignment.bind(null, task.id, problem.id)}
           language={problem.language}
           starterCode={problem.starterCode ?? ''}
           testCases={
@@ -138,6 +149,10 @@ export default async function ProblemWorkspacePage({
           }
           lastCode={lastSubmission?.code ?? null}
           canSubmit={!overdue}
+          points={taskProblem.points}
+          attemptsUsed={submissions.length}
+          freeAttempts={task.freeAttempts}
+          penaltyPercent={task.penaltyPercent}
         />
       </main>
     </div>

@@ -9,6 +9,7 @@ import {
   type SchoolStudent,
 } from '@/lib/students'
 import { languageLabel } from '@/lib/languages'
+import { bestScore, formatScore } from '@/lib/scoring'
 import Navbar from '@/components/Navbar'
 import TurtleCanvas from '@/components/TurtleCanvas'
 import DeleteAssignmentButton from '../DeleteAssignmentButton'
@@ -62,7 +63,10 @@ export default async function AssignmentDetailPage({
   ])
   if (!task) notFound()
 
-  const problems = task.problems.map((tp) => tp.problem)
+  // โจทย์พร้อมคะแนนเต็มรายข้อในงานนี้
+  const problems = task.problems.map((tp) => ({ ...tp.problem, points: tp.points }))
+  const totalPoints = problems.reduce((sum, p) => sum + p.points, 0)
+  const policy = { freeAttempts: task.freeAttempts, penaltyPercent: task.penaltyPercent }
 
   // แท็บ: ห้องละแท็บ + แท็บ "รายคน" ถ้ามี
   const roomTargets = task.targets
@@ -105,34 +109,45 @@ export default async function AssignmentDetailPage({
     }
   }
 
-  // ผลส่งล่าสุดต่อ (ข้อ, นักเรียน)
+  // ผลส่งล่าสุดต่อ (ข้อ, นักเรียน) — ใช้แสดงโค้ด/ภาพที่ส่ง
+  // และการส่งทุกครั้งเรียงเก่า→ใหม่ — ใช้คิดคะแนน (ลำดับ = ครั้งที่ส่ง)
   const latest = new Map<string, (typeof task.submissions)[number]>()
+  const byKey = new Map<string, (typeof task.submissions)[number][]>()
   for (const s of task.submissions) {
     const key = `${s.problemId}:${s.studentCode}`
     if (!latest.has(key)) latest.set(key, s)
+    const arr = byKey.get(key)
+    if (arr) arr.unshift(s) // วนจากใหม่→เก่า จึง unshift ให้ array เรียงเก่า→ใหม่
+    else byKey.set(key, [s])
   }
 
-  const fullCount = (s: SchoolStudent) =>
-    problems.filter((p) => {
-      const l = latest.get(`${p.id}:${s.student_code}`)
-      return l && l.passed === l.total
-    }).length
+  // คะแนนจริงของข้อ = ครั้งที่ดีที่สุดหลังหักส่งซ้ำ (null = ยังไม่ส่ง)
+  const scoreOf = (problemId: number, points: number, studentCode: string): number | null => {
+    const subs = byKey.get(`${problemId}:${studentCode}`)
+    return subs ? bestScore(subs, points, policy) : null
+  }
+  const totalScore = (s: SchoolStudent) =>
+    problems.reduce((sum, p) => sum + (scoreOf(p.id, p.points, s.student_code) ?? 0), 0)
   const doneCount = (s: SchoolStudent) =>
     problems.filter((p) => latest.has(`${p.id}:${s.student_code}`)).length
 
   const submittedStudents = students.filter((s) => doneCount(s) > 0).length
-  const allFullStudents = students.filter((s) => fullCount(s) === problems.length).length
+  const allFullStudents = students.filter(
+    (s) => doneCount(s) === problems.length && totalScore(s) >= totalPoints
+  ).length
 
   const yearTitle =
     years.find((y) => y.id === task.academicYearId)?.title ?? `ปี id ${task.academicYearId}`
 
-  const scoreBadge = (language: string, passed: number, total: number) => (
+  // ป้ายคะแนนรายข้อ — tooltip บอกผลตรวจดิบ + จำนวนครั้งที่ส่ง
+  const scoreBadge = (score: number, points: number, tooltip: string) => (
     <span
+      title={tooltip}
       className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
-        passed === total ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'
+        score >= points ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'
       }`}
     >
-      {language === 'turtle' ? `${passed}%` : `${passed}/${total}`}
+      {formatScore(score)}
     </span>
   )
 
@@ -140,7 +155,7 @@ export default async function AssignmentDetailPage({
     'px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent'
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-page">
       <Navbar user={user} />
       <main className="max-w-6xl mx-auto px-4 sm:px-6 py-6">
         <div className="mb-6">
@@ -149,12 +164,22 @@ export default async function AssignmentDetailPage({
           </Link>
           <div className="flex items-center justify-between mt-2 gap-3">
             <h1 className="text-2xl font-bold text-gray-900 min-w-0">{task.title}</h1>
-            <div className="shrink-0">
+            <div className="shrink-0 flex items-center gap-2">
+              <a
+                href={`/assign/${task.id}/export`}
+                className="px-4 py-2 text-sm font-medium text-green-700 bg-green-50 hover:bg-green-100 rounded-lg transition"
+              >
+                ⬇ Export Excel
+              </a>
               <DeleteAssignmentButton id={task.id} label={task.title} redirectTo="/assign" />
             </div>
           </div>
           <p className="text-gray-500 mt-1">
-            {problems.length} ข้อ · {yearTitle} ภาคเรียนที่ {task.semester} · สร้างเมื่อ{' '}
+            {problems.length} ข้อ · เต็ม {totalPoints} คะแนน ·{' '}
+            {task.freeAttempts > 0
+              ? `ส่งฟรี ${task.freeAttempts} ครั้ง เกินหัก ${task.penaltyPercent}%/ครั้ง`
+              : 'ส่งซ้ำได้ไม่จำกัด'}{' '}
+            · {yearTitle} ภาคเรียนที่ {task.semester} · สร้างเมื่อ{' '}
             {task.createdAt.toLocaleDateString('th-TH', { dateStyle: 'medium' })}
           </p>
           <p className="text-sm text-gray-500 mt-1">
@@ -172,22 +197,22 @@ export default async function AssignmentDetailPage({
 
         {/* สรุป + กำหนดส่ง */}
         <div className="grid sm:grid-cols-4 gap-4 mb-6">
-          <div className="bg-white rounded-xl border border-gray-200 p-4">
+          <div className="bg-white rounded-2xl border border-indigo-100 shadow-sm p-4">
             <p className="text-sm text-gray-500">นักเรียน (แท็บนี้)</p>
             <p className="text-2xl font-bold text-gray-900 mt-0.5">{students.length}</p>
           </div>
-          <div className="bg-white rounded-xl border border-gray-200 p-4">
+          <div className="bg-white rounded-2xl border border-indigo-100 shadow-sm p-4">
             <p className="text-sm text-gray-500">เริ่มทำแล้ว</p>
             <p className="text-2xl font-bold text-indigo-600 mt-0.5">
               {submittedStudents}
               <span className="text-sm font-normal text-gray-400"> / {students.length}</span>
             </p>
           </div>
-          <div className="bg-white rounded-xl border border-gray-200 p-4">
+          <div className="bg-white rounded-2xl border border-indigo-100 shadow-sm p-4">
             <p className="text-sm text-gray-500">เต็มทุกข้อ</p>
             <p className="text-2xl font-bold text-green-600 mt-0.5">{allFullStudents}</p>
           </div>
-          <div className="bg-white rounded-xl border border-gray-200 p-4">
+          <div className="bg-white rounded-2xl border border-indigo-100 shadow-sm p-4">
             <p className="text-sm text-gray-500 mb-1.5">กำหนดส่ง</p>
             <form action={updateAssignmentDue.bind(null, task.id)} className="flex gap-2">
               <input
@@ -224,7 +249,7 @@ export default async function AssignmentDetailPage({
         </div>
 
         {/* ตารางคะแนน */}
-        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <div className="bg-white rounded-2xl border border-indigo-100 shadow-sm overflow-hidden">
           {students.length === 0 ? (
             <div className="px-6 py-10 text-center text-gray-400 text-sm">
               ไม่พบนักเรียนในแท็บนี้
@@ -239,14 +264,22 @@ export default async function AssignmentDetailPage({
                     {problems.map((p, i) => (
                       <th key={p.id} className="px-4 py-3 font-medium text-center" title={p.title}>
                         ข้อ {i + 1}
+                        <span className="block text-xs font-normal text-gray-400">
+                          {p.points} คะแนน
+                        </span>
                       </th>
                     ))}
-                    <th className="px-4 py-3 font-medium text-center">เต็ม</th>
+                    <th className="px-4 py-3 font-medium text-center">
+                      รวม
+                      <span className="block text-xs font-normal text-gray-400">
+                        {totalPoints} คะแนน
+                      </span>
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {students.map((s) => {
-                    const full = fullCount(s)
+                    const total = totalScore(s)
                     const hasAny = doneCount(s) > 0
                     return (
                       <tr key={s.id} className="hover:bg-gray-50 align-top">
@@ -306,11 +339,21 @@ export default async function AssignmentDetailPage({
                           )}
                         </td>
                         {problems.map((p) => {
+                          const subs = byKey.get(`${p.id}:${s.student_code}`)
                           const l = latest.get(`${p.id}:${s.student_code}`)
+                          const score = scoreOf(p.id, p.points, s.student_code)
                           return (
                             <td key={p.id} className="px-4 py-3 text-center">
-                              {l ? (
-                                scoreBadge(p.language, l.passed, l.total)
+                              {score !== null && subs && l ? (
+                                scoreBadge(
+                                  score,
+                                  p.points,
+                                  `ส่ง ${subs.length} ครั้ง · ล่าสุด ${
+                                    p.language === 'turtle'
+                                      ? `เหมือนเฉลย ${l.passed}%`
+                                      : `ผ่าน ${l.passed}/${l.total} เคส`
+                                  }`
+                                )
                               ) : (
                                 <span className="text-gray-300">—</span>
                               )}
@@ -320,10 +363,10 @@ export default async function AssignmentDetailPage({
                         <td className="px-4 py-3 text-center">
                           <span
                             className={`text-xs font-medium ${
-                              full === problems.length ? 'text-green-600' : 'text-gray-500'
+                              hasAny && total >= totalPoints ? 'text-green-600' : 'text-gray-500'
                             }`}
                           >
-                            {full}/{problems.length}
+                            {hasAny ? formatScore(total) : '—'}
                           </span>
                         </td>
                       </tr>

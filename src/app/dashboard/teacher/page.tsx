@@ -26,15 +26,15 @@ export default async function TeacherDashboard() {
 
       {/* Summary cards */}
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-8">
-        <div className="bg-white rounded-xl border border-gray-200 p-5">
+        <div className="bg-white rounded-2xl border border-indigo-100 shadow-sm p-5">
           <p className="text-sm text-gray-500">นักเรียนทั้งหมด</p>
           <p className="text-3xl font-bold text-gray-900 mt-1">{studentCount}</p>
         </div>
-        <div className="bg-white rounded-xl border border-gray-200 p-5 opacity-50">
+        <div className="bg-white rounded-2xl border border-indigo-100 shadow-sm p-5 opacity-50">
           <p className="text-sm text-gray-500">โจทย์ทั้งหมด</p>
           <p className="text-3xl font-bold text-gray-400 mt-1">—</p>
         </div>
-        <div className="bg-white rounded-xl border border-gray-200 p-5 opacity-50 col-span-2 sm:col-span-1">
+        <div className="bg-white rounded-2xl border border-indigo-100 shadow-sm p-5 opacity-50 col-span-2 sm:col-span-1">
           <p className="text-sm text-gray-500">การส่งงานวันนี้</p>
           <p className="text-3xl font-bold text-gray-400 mt-1">—</p>
         </div>

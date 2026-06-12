@@ -39,11 +39,11 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="min-h-screen bg-gradient-to-br from-slate-100 via-blue-50 to-indigo-100 flex items-center justify-center p-4">
+    <main className="min-h-screen bg-gradient-to-br from-indigo-100 via-pink-50 to-cyan-100 flex items-center justify-center p-4">
       <div className="w-full max-w-sm">
         {/* Logo */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 bg-indigo-600 rounded-2xl shadow-lg mb-4">
+          <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-br from-indigo-500 to-pink-500 rounded-2xl shadow-lg mb-4">
             <svg
               className="w-9 h-9 text-white"
               fill="none"
@@ -58,12 +58,14 @@ export default function LoginPage() {
               />
             </svg>
           </div>
-          <h1 className="text-3xl font-bold text-gray-900">CodeGrader</h1>
-          <p className="text-gray-500 text-sm mt-1">ระบบตรวจโค้ดนักเรียน</p>
+          <h1 className="text-3xl font-bold bg-gradient-to-r from-indigo-600 to-pink-500 bg-clip-text text-transparent">
+            CodeGrader
+          </h1>
+          <p className="text-gray-500 text-sm mt-1">เขียนโค้ด เก็บคะแนน สนุกไปด้วยกัน ✨</p>
         </div>
 
         {/* Card */}
-        <div className="bg-white rounded-2xl shadow-xl p-7">
+        <div className="bg-white/90 backdrop-blur rounded-3xl shadow-xl p-7">
           {/* Error */}
           {error && (
             <div className="mb-5 flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
@@ -116,7 +118,7 @@ export default function LoginPage() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white font-medium py-2.5 px-4 rounded-xl transition duration-150 disabled:opacity-60 disabled:cursor-not-allowed mt-2 text-sm"
+              className="w-full bg-gradient-to-r from-indigo-500 to-pink-500 hover:from-indigo-600 hover:to-pink-600 text-white font-medium py-2.5 px-4 rounded-xl transition duration-150 disabled:opacity-60 disabled:cursor-not-allowed mt-2 text-sm shadow-md"
             >
               {loading ? (
                 <span className="flex items-center justify-center gap-2">

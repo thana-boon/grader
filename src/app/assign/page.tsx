@@ -36,7 +36,7 @@ export default async function AssignListPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-page">
       <Navbar user={user} />
       <main className="max-w-5xl mx-auto px-4 sm:px-6 py-6">
         {/* Header */}
@@ -55,7 +55,7 @@ export default async function AssignListPage() {
           </Link>
         </div>
 
-        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <div className="bg-white rounded-2xl border border-indigo-100 shadow-sm overflow-hidden">
           {tasks.length === 0 ? (
             <div className="px-6 py-12 text-center">
               <p className="text-gray-400 font-medium">ยังไม่มีงานที่มอบหมาย</p>

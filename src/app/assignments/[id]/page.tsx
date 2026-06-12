@@ -5,7 +5,8 @@ import { prisma } from '@/lib/prisma'
 import { getActiveSetting } from '@/lib/academicYear'
 import { findSchoolStudentByCodeAndYear } from '@/lib/students'
 import { targetsMatchStudent } from '@/lib/assignments'
-import { languageLabel, scoreLabel } from '@/lib/languages'
+import { languageLabel } from '@/lib/languages'
+import { bestScore, formatScore } from '@/lib/scoring'
 import Navbar from '@/components/Navbar'
 
 export default async function TaskPage({
@@ -49,21 +50,30 @@ export default async function TaskPage({
     notFound()
   }
 
-  // ผลส่งล่าสุดของแต่ละข้อ
+  // การส่งทุกครั้งของแต่ละข้อ เรียงเก่า→ใหม่ (ลำดับ = ครั้งที่ส่ง ใช้คิดคะแนน)
   const submissions = await prisma.submission.findMany({
     where: { assignmentId: id, studentCode: student.student_code },
-    orderBy: { createdAt: 'desc' },
+    orderBy: { createdAt: 'asc' },
   })
-  const latest = new Map<number, (typeof submissions)[number]>()
+  const byProblem = new Map<number, typeof submissions>()
   for (const s of submissions) {
-    if (!latest.has(s.problemId)) latest.set(s.problemId, s)
+    const arr = byProblem.get(s.problemId)
+    if (arr) arr.push(s)
+    else byProblem.set(s.problemId, [s])
   }
 
-  const doneCount = task.problems.filter((tp) => latest.has(tp.problem.id)).length
+  const policy = { freeAttempts: task.freeAttempts, penaltyPercent: task.penaltyPercent }
+  const totalPoints = task.problems.reduce((sum, tp) => sum + tp.points, 0)
+  const myScore = task.problems.reduce((sum, tp) => {
+    const subs = byProblem.get(tp.problem.id)
+    return sum + (subs ? bestScore(subs, tp.points, policy) : 0)
+  }, 0)
+
+  const doneCount = task.problems.filter((tp) => byProblem.has(tp.problem.id)).length
   const overdue = task.dueAt !== null && new Date() > task.dueAt
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-page">
       <Navbar user={user} />
       <main className="max-w-4xl mx-auto px-4 sm:px-6 py-6">
         <div className="mb-6">
@@ -84,6 +94,15 @@ export default async function TaskPage({
             >
               ทำแล้ว {doneCount}/{task.problems.length} ข้อ
             </span>
+            <span
+              className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${
+                doneCount > 0 && myScore >= totalPoints
+                  ? 'bg-green-100 text-green-700'
+                  : 'bg-indigo-100 text-indigo-700'
+              }`}
+            >
+              ได้ {formatScore(myScore)}/{totalPoints} คะแนน
+            </span>
           </div>
           <p className="text-sm text-gray-500 mt-1">
             {task.dueAt
@@ -92,14 +111,18 @@ export default async function TaskPage({
                   timeStyle: 'short',
                 })}${overdue ? ' (เลยกำหนดแล้ว — ส่งงานไม่ได้)' : ''}`
               : 'ไม่มีกำหนดส่ง'}
+            {task.freeAttempts > 0
+              ? ` · ส่งได้ ${task.freeAttempts} ครั้งโดยไม่หักคะแนน เกินแล้วเพดานคะแนนลดครั้งละ ${task.penaltyPercent}% (คิดจากครั้งที่ดีที่สุด)`
+              : ' · ส่งซ้ำได้ไม่จำกัด คะแนนคิดจากครั้งที่ดีที่สุด'}
           </p>
         </div>
 
         {/* รายการข้อ */}
-        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <div className="bg-white rounded-2xl border border-indigo-100 shadow-sm overflow-hidden">
           <ul className="divide-y divide-gray-100">
             {task.problems.map((tp, i) => {
-              const last = latest.get(tp.problem.id)
+              const subs = byProblem.get(tp.problem.id)
+              const score = subs ? bestScore(subs, tp.points, policy) : null
               return (
                 <li key={tp.id}>
                   <Link
@@ -109,9 +132,9 @@ export default async function TaskPage({
                     <div className="flex items-center gap-3 min-w-0">
                       <div
                         className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold shrink-0 ${
-                          last && last.passed === last.total
+                          score !== null && score >= tp.points
                             ? 'bg-green-100 text-green-700'
-                            : last
+                            : score !== null
                               ? 'bg-amber-100 text-amber-700'
                               : 'bg-gray-100 text-gray-500'
                         }`}
@@ -124,23 +147,24 @@ export default async function TaskPage({
                         </p>
                         <p className="text-xs text-gray-500">
                           {languageLabel(tp.problem.language)}
+                          {subs && ` · ส่งแล้ว ${subs.length} ครั้ง`}
                         </p>
                       </div>
                     </div>
                     <div className="shrink-0 ml-3">
-                      {last ? (
+                      {score !== null ? (
                         <span
                           className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${
-                            last.passed === last.total
+                            score >= tp.points
                               ? 'bg-green-100 text-green-700'
                               : 'bg-amber-100 text-amber-700'
                           }`}
                         >
-                          {scoreLabel(tp.problem.language, last.passed, last.total)}
+                          {formatScore(score)}/{tp.points} คะแนน
                         </span>
                       ) : (
                         <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-500">
-                          ยังไม่ส่ง
+                          ยังไม่ส่ง · {tp.points} คะแนน
                         </span>
                       )}
                     </div>

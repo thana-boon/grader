@@ -35,24 +35,33 @@ export async function createTask(
   const dueRaw = (formData.get('dueAt') as string)?.trim()
   const dueAt = dueRaw ? new Date(dueRaw) : null
 
-  // โจทย์ที่เลือก (เรียงตามลำดับที่ครูเลือก = ลำดับข้อ)
-  let problemIds: unknown
+  // โจทย์ที่เลือกพร้อมคะแนนเต็มรายข้อ (เรียงตามลำดับที่ครูเลือก = ลำดับข้อ)
+  let problemsRaw: unknown
   try {
-    problemIds = JSON.parse((formData.get('problemIds') as string) ?? '[]')
+    problemsRaw = JSON.parse((formData.get('problems') as string) ?? '[]')
   } catch {
     return { error: 'รายการโจทย์ไม่ถูกต้อง' }
   }
-  if (!Array.isArray(problemIds) || problemIds.length === 0) {
+  if (!Array.isArray(problemsRaw) || problemsRaw.length === 0) {
     return { error: 'กรุณาเลือกโจทย์อย่างน้อย 1 ข้อ' }
   }
-  const ids = problemIds.map(Number).filter((n) => Number.isInteger(n) && n > 0)
+  const picked = (problemsRaw as { id?: unknown; points?: unknown }[])
+    .map((p) => ({
+      id: Number(p?.id),
+      points: Math.min(1000, Math.max(1, Math.round(Number(p?.points)) || 10)),
+    }))
+    .filter((p) => Number.isInteger(p.id) && p.id > 0)
   const found = await prisma.problem.findMany({
-    where: { id: { in: ids } },
+    where: { id: { in: picked.map((p) => p.id) } },
     select: { id: true },
   })
   const foundIds = new Set(found.map((p) => p.id))
-  const validIds = ids.filter((id) => foundIds.has(id))
-  if (validIds.length === 0) return { error: 'ไม่พบโจทย์ที่เลือก' }
+  const validProblems = picked.filter((p) => foundIds.has(p.id))
+  if (validProblems.length === 0) return { error: 'ไม่พบโจทย์ที่เลือก' }
+
+  // นโยบายส่งซ้ำ — ส่งฟรีกี่ครั้ง (0/ว่าง = ไม่จำกัด) และเกินแล้วหักครั้งละกี่ %
+  const freeAttempts = Math.min(99, Math.max(0, Math.round(Number(formData.get('freeAttempts'))) || 0))
+  const penaltyPercent = Math.min(100, Math.max(0, Math.round(Number(formData.get('penaltyPercent'))) || 0))
 
   // เป้าหมาย — ห้อง และ/หรือ รายคน
   let targetsRaw: unknown
@@ -96,7 +105,11 @@ export async function createTask(
       academicYearId: active.academicYearId,
       semester: active.semester,
       dueAt,
-      problems: { create: validIds.map((problemId, i) => ({ problemId, sortOrder: i })) },
+      freeAttempts,
+      penaltyPercent,
+      problems: {
+        create: validProblems.map((p, i) => ({ problemId: p.id, sortOrder: i, points: p.points })),
+      },
       targets: { create: targets },
     },
   })

@@ -362,7 +362,7 @@ export default function ProblemForm({
       )}
 
       {/* ข้อมูลโจทย์ */}
-      <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
+      <div className="bg-white rounded-2xl border border-indigo-100 shadow-sm p-6 space-y-4">
         <div className="flex flex-wrap gap-4">
           <div className="flex-1 min-w-64">
             <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -458,7 +458,7 @@ export default function ProblemForm({
 
       {/* โหมด pandas: ไฟล์ข้อมูลแนบ */}
       {isPandas && (
-        <div className="bg-white rounded-xl border border-gray-200 p-6">
+        <div className="bg-white rounded-2xl border border-indigo-100 shadow-sm p-6">
           <h2 className="text-base font-semibold text-gray-900 mb-1">
             ไฟล์ข้อมูลแนบ (ไม่บังคับ)
           </h2>
@@ -514,7 +514,7 @@ export default function ProblemForm({
 
       {/* โหมด scratch: เกณฑ์การตรวจ block */}
       {isScratch && (
-        <div className="bg-white rounded-xl border border-gray-200 p-6">
+        <div className="bg-white rounded-2xl border border-indigo-100 shadow-sm p-6">
           <div className="flex items-center justify-between mb-1">
             <h2 className="text-base font-semibold text-gray-900">
               เกณฑ์การตรวจ ({scratchChecks.length})
@@ -637,7 +637,7 @@ export default function ProblemForm({
 
       {/* โหมด html: เกณฑ์การตรวจโครงสร้าง */}
       {isHtml && (
-        <div className="bg-white rounded-xl border border-gray-200 p-6">
+        <div className="bg-white rounded-2xl border border-indigo-100 shadow-sm p-6">
           <div className="flex items-center justify-between mb-1">
             <h2 className="text-base font-semibold text-gray-900">
               เกณฑ์การตรวจ ({htmlChecks.length})
@@ -786,7 +786,7 @@ export default function ProblemForm({
 
       {/* โหมด turtle: ภาพเฉลย */}
       {isTurtle && (
-        <div className="bg-white rounded-xl border border-gray-200 p-6">
+        <div className="bg-white rounded-2xl border border-indigo-100 shadow-sm p-6">
           <div className="flex items-center justify-between mb-1">
             <h2 className="text-base font-semibold text-gray-900">ภาพเฉลย</h2>
             <button
@@ -821,7 +821,7 @@ export default function ProblemForm({
       )}
 
       {/* Test cases */}
-      <div className={`bg-white rounded-xl border border-gray-200 p-6 ${isTurtle || isHtml || isScratch ? 'hidden' : ''}`}>
+      <div className={`bg-white rounded-2xl border border-indigo-100 shadow-sm p-6 ${isTurtle || isHtml || isScratch ? 'hidden' : ''}`}>
         <div className="flex items-center justify-between mb-1">
           <h2 className="text-base font-semibold text-gray-900">
             Test cases ({testCases.length})

@@ -5,6 +5,8 @@ import { getCurrentUser } from '@/lib/auth'
 import { getActiveSetting } from '@/lib/academicYear'
 import { findSchoolStudentByCodeAndYear } from '@/lib/students'
 import { targetsMatchStudent } from '@/lib/assignments'
+import { attemptMultiplier, submissionScore } from '@/lib/scoring'
+import { checkResults, type SubmittedResults } from '@/lib/submissionCheck'
 import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
 
@@ -12,17 +14,14 @@ export type SubmitResult = {
   error?: string
   passed?: number
   total?: number
+  // คะแนนของการส่งครั้งนี้ (หักตามนโยบายส่งซ้ำแล้ว)
+  score?: number
+  points?: number
+  attempt?: number
+  multiplier?: number
 }
 
-// ผลตรวจ turtle — % ความเหมือนของภาพ + ภาพที่นักเรียนวาด (เก็บให้ครูดู)
-export type TurtleResult = { percent: number; drawing: string | null }
-
-// ผลตรวจ scratch — ผ่าน/ไม่ผ่านรายเกณฑ์ + token ไฟล์ .sb3 ที่อัปโหลดไว้ + สถิติ
-export type ScratchResult = {
-  flags: boolean[]
-  fileToken: string | null
-  stats?: { spriteCount: number; totalBlocks: number }
-}
+export type { TurtleResult, ScratchResult, SubmittedResults } from '@/lib/submissionCheck'
 
 // รับผลตรวจจากเบราว์เซอร์นักเรียน (ตรวจด้วย Pyodide ฝั่ง client ตามที่ออกแบบ)
 // server ตรวจสิทธิ์/เงื่อนไขซ้ำทั้งหมด ยกเว้นผลรันโค้ดซึ่งต้องเชื่อ client
@@ -30,7 +29,7 @@ export async function submitAssignment(
   assignmentId: number,
   problemId: number,
   code: string,
-  results: boolean[] | TurtleResult | ScratchResult
+  results: SubmittedResults
 ): Promise<SubmitResult> {
   const user = await getCurrentUser()
   if (!user || user.role !== 'student') redirect('/login')
@@ -68,49 +67,21 @@ export async function submitAssignment(
     return { error: 'เลยกำหนดส่งแล้ว ไม่สามารถส่งงานได้' }
   }
 
-  let passed: number
-  let total: number
-  let details: string | null
+  const checked = await checkResults(
+    taskProblem.problem.language,
+    taskProblem.problem.testCases.length,
+    results
+  )
+  if (!checked.ok) return { error: checked.error }
+  const { passed, total, details } = checked
 
-  if (taskProblem.problem.language === 'scratch') {
-    // scratch: ผ่าน/ไม่ผ่านรายเกณฑ์ + เก็บ token ไฟล์ .sb3 ไว้ให้ครูดาวน์โหลด
-    if (Array.isArray(results) || !('flags' in results) || !Array.isArray(results.flags)) {
-      return { error: 'ผลการตรวจไม่ถูกต้อง กรุณากดส่งใหม่' }
-    }
-    total = taskProblem.problem.testCases.length
-    if (results.flags.length !== total || results.flags.some((f) => typeof f !== 'boolean')) {
-      return { error: 'ผลการตรวจไม่ถูกต้อง กรุณากดส่งใหม่' }
-    }
-    const { SCRATCH_TOKEN_PATTERN } = await import('@/lib/scratchStorage')
-    const fileToken =
-      typeof results.fileToken === 'string' && SCRATCH_TOKEN_PATTERN.test(results.fileToken)
-        ? results.fileToken
-        : null
-    passed = results.flags.filter(Boolean).length
-    details = JSON.stringify({ file: fileToken, flags: results.flags, stats: results.stats ?? null })
-  } else if (taskProblem.problem.language === 'turtle') {
-    // turtle: คะแนน = % ความเหมือนของภาพ (0-100), details = ภาพที่นักเรียนวาด
-    if (Array.isArray(results) || !('percent' in results) || typeof results.percent !== 'number') {
-      return { error: 'ผลการตรวจไม่ถูกต้อง กรุณากดส่งใหม่' }
-    }
-    passed = Math.max(0, Math.min(100, Math.round(results.percent)))
-    total = 100
-    details =
-      typeof results.drawing === 'string' && results.drawing.length <= 1_000_000
-        ? results.drawing
-        : null
-  } else {
-    total = taskProblem.problem.testCases.length
-    if (
-      !Array.isArray(results) ||
-      results.length !== total ||
-      results.some((r) => typeof r !== 'boolean')
-    ) {
-      return { error: 'ผลการตรวจไม่ถูกต้อง กรุณากดส่งใหม่' }
-    }
-    passed = results.filter(Boolean).length
-    details = JSON.stringify(results)
-  }
+  // ครั้งที่ส่ง = จำนวนที่เคยส่งแล้ว + 1 — ใช้คิดตัวหักตามนโยบายส่งซ้ำของงาน
+  const attempt =
+    (await prisma.submission.count({
+      where: { assignmentId, problemId, studentCode: student.student_code },
+    })) + 1
+  const multiplier = attemptMultiplier(attempt, task)
+  const score = submissionScore(passed, total, taskProblem.points, multiplier)
 
   await prisma.submission.create({
     data: {
@@ -126,5 +97,5 @@ export async function submitAssignment(
 
   revalidatePath('/dashboard/student')
   revalidatePath(`/assignments/${assignmentId}`)
-  return { passed, total }
+  return { passed, total, score, points: taskProblem.points, attempt, multiplier }
 }

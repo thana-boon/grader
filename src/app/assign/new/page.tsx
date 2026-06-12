@@ -24,7 +24,7 @@ export default async function NewAssignmentPage() {
   ])
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-page">
       <Navbar user={user} />
       <main className="max-w-3xl mx-auto px-4 sm:px-6 py-6">
         <div className="mb-6">
@@ -45,7 +45,7 @@ export default async function NewAssignmentPage() {
         </div>
 
         {active && problems.length === 0 ? (
-          <div className="bg-white rounded-xl border border-gray-200 px-6 py-10 text-center">
+          <div className="bg-white rounded-2xl border border-indigo-100 shadow-sm px-6 py-10 text-center">
             <p className="text-gray-400">
               ยังไม่มีโจทย์ในคลัง —{' '}
               <Link href="/problems/new" className="text-indigo-600 hover:underline">

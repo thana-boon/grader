@@ -354,29 +354,57 @@ _turtle_mod = types.ModuleType('turtle')
 exec(_TURTLE_SRC, _turtle_mod.__dict__)
 sys.modules['turtle'] = _turtle_mod
 
-def __grader_run(code, stdin_text):
+# โหมดโต้ตอบ: ถ้า input() ถูกเรียกตอนข้อมูลหมด ให้หยุดรันแล้วส่งสัญญาณไปถามผู้ใช้
+# (ฝั่ง JS จะรันใหม่ตั้งแต่ต้นพร้อม input ที่สะสมเพิ่มทีละบรรทัด)
+class _NeedInput(Exception):
+    pass
+
+class _EchoStdin(io.TextIOBase):
+    # echo บรรทัดที่อ่านลง stdout ด้วย เพื่อให้ transcript หน้าตาเหมือน terminal จริง
+    def __init__(self, text, out):
+        self._buf = io.StringIO(text)
+        self._out = out
+    def readable(self):
+        return True
+    def readline(self, *args):
+        line = self._buf.readline()
+        if line == '':
+            raise _NeedInput()
+        self._out.write(line)
+        return line
+    def read(self, *args):
+        data = self._buf.read()
+        if data == '':
+            raise _NeedInput()
+        self._out.write(data)
+        return data
+
+def __grader_run(code, stdin_text, interactive=False):
     _turtle_mod._reset_recording()
-    sys.stdin = io.StringIO(stdin_text)
     buf = io.StringIO()
+    sys.stdin = _EchoStdin(stdin_text, buf) if interactive else io.StringIO(stdin_text)
     old_out, old_err = sys.stdout, sys.stderr
     sys.stdout = buf
     sys.stderr = buf
     err = None
+    need_input = False
     try:
         exec(compile(code, '<code>', 'exec'), {'__name__': '__main__'})
     except SystemExit:
         pass
+    except _NeedInput:
+        need_input = True
     except BaseException:
         err = traceback.format_exc(limit=2)
     finally:
         sys.stdout, sys.stderr = old_out, old_err
-    return (buf.getvalue(), err, _turtle_mod._drawing_json())
+    return (buf.getvalue(), err, _turtle_mod._drawing_json(), need_input)
 \`
 
 const loadedPackages = new Set()
 
 self.onmessage = async (e) => {
-  const { id, code, stdin, packages, files } = e.data
+  const { id, code, stdin, packages, files, interactive } = e.data
   try {
     const pyodide = await pyodideReady
     // โหลดแพ็กเกจเพิ่ม (เช่น pandas) — โหลดครั้งเดียวต่อ worker
@@ -396,11 +424,11 @@ self.onmessage = async (e) => {
     }
     pyodide.runPython(RUNNER)
     const run = pyodide.globals.get('__grader_run')
-    const result = run(code, stdin)
-    const [output, error, drawing] = result.toJs()
+    const result = run(code, stdin, !!interactive)
+    const [output, error, drawing, needInput] = result.toJs()
     result.destroy()
     run.destroy()
-    self.postMessage({ id, ok: !error, output, error: error || null, drawing })
+    self.postMessage({ id, ok: !error, output, error: error || null, drawing, needInput: !!needInput })
   } catch (err) {
     self.postMessage({ id, ok: false, output: '', error: String(err), drawing: null })
   }
@@ -413,12 +441,14 @@ export type RunResult = {
   error: string | null
   timedOut: boolean
   drawing: string | null // JSON ภาพวาด turtle ({bg, events}) — events ว่างถ้าไม่ได้ใช้ turtle
+  needInput?: boolean // โหมดโต้ตอบ: โค้ดเรียก input() แต่ข้อมูลหมด — ต้องถามผู้ใช้แล้วรันใหม่
 }
 
 export type RunOptions = {
   timeoutMs?: number
   packages?: string[] // แพ็กเกจ Pyodide ที่ต้องโหลดก่อน เช่น ['pandas']
   files?: { name: string; content: string }[] // ไฟล์ข้อมูลแนบ
+  interactive?: boolean // หยุดถามเมื่อ input() ไม่มีข้อมูล แทนการ error
 }
 
 type Pending = { resolve: (r: RunResult) => void; timer: number }
@@ -433,12 +463,12 @@ class PythonRunner {
     const blob = new Blob([WORKER_SOURCE], { type: 'application/javascript' })
     const worker = new Worker(URL.createObjectURL(blob))
     worker.onmessage = (e: MessageEvent) => {
-      const { id, ok, output, error, drawing } = e.data
+      const { id, ok, output, error, drawing, needInput } = e.data
       const p = this.pending.get(id)
       if (!p) return
       clearTimeout(p.timer)
       this.pending.delete(id)
-      p.resolve({ ok, output, error, drawing: drawing ?? null, timedOut: false })
+      p.resolve({ ok, output, error, drawing: drawing ?? null, timedOut: false, needInput: !!needInput })
     }
     this.worker = worker
     return worker
@@ -451,7 +481,7 @@ class PythonRunner {
   }
 
   run(code: string, stdin: string, options: RunOptions = {}): Promise<RunResult> {
-    const { timeoutMs = 15_000, packages, files } = options
+    const { timeoutMs = 15_000, packages, files, interactive } = options
     const worker = this.ensureWorker()
     const id = ++this.seq
     return new Promise((resolve) => {
@@ -468,8 +498,38 @@ class PythonRunner {
         resolve({ ok: false, output: '', error: null, timedOut: true, drawing: null })
       }, timeoutMs)
       this.pending.set(id, { resolve, timer })
-      worker.postMessage({ id, code, stdin, packages, files })
+      worker.postMessage({ id, code, stdin, packages, files, interactive })
     })
+  }
+
+  // รันแบบโต้ตอบเหมือน IDE — เจอ input() เมื่อไรเรียก onInput ให้ผู้ใช้พิมพ์
+  // แล้วรันใหม่ตั้งแต่ต้นพร้อม input ที่สะสมไว้ (โค้ดแบบฝึกหัดสั้น การรันซ้ำจึงมองไม่เห็น)
+  // onInput คืน null = ผู้ใช้กดยกเลิก
+  async runInteractive(
+    code: string,
+    options: RunOptions,
+    onInput: (promptText: string, outputSoFar: string) => Promise<string | null>
+  ): Promise<RunResult> {
+    const lines: string[] = []
+    for (let round = 0; round < 100; round++) {
+      const stdin = lines.length ? lines.join('\n') + '\n' : ''
+      const res = await this.run(code, stdin, { ...options, interactive: true })
+      if (!res.needInput) return res
+      // ข้อความ prompt = สิ่งที่โปรแกรมพิมพ์ค้างไว้บรรทัดสุดท้าย เช่น input('ชื่อ: ')
+      const promptText = res.output.slice(res.output.lastIndexOf('\n') + 1)
+      const answer = await onInput(promptText, res.output)
+      if (answer === null) {
+        return { ...res, ok: false, needInput: false, error: '(ยกเลิกการรัน)' }
+      }
+      lines.push(answer)
+    }
+    return {
+      ok: false,
+      output: '',
+      error: 'โปรแกรมขอ input เกิน 100 ครั้ง — ตรวจสอบ loop ของคุณ',
+      timedOut: false,
+      drawing: null,
+    }
   }
 }
 

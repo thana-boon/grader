@@ -10,7 +10,7 @@ export default function CreateTeacherForm() {
   )
 
   return (
-    <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
+    <div className="bg-white rounded-2xl border border-indigo-100 shadow-sm p-6 mb-6">
       <h2 className="text-base font-semibold text-gray-900 mb-4">เพิ่มบัญชีครู</h2>
 
       {state.error && (

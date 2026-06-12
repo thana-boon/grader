@@ -32,10 +32,14 @@ export default function AssignForm({
 
   // โจทย์ — เก็บเป็น array ตามลำดับที่เลือก (= ลำดับข้อในงาน)
   const [selectedProblems, setSelectedProblems] = useState<number[]>([])
-  const toggleProblem = (id: number) =>
+  // คะแนนเต็มรายข้อ — เก็บเป็น string ให้พิมพ์แก้ได้ลื่น แปลงเป็นตัวเลขตอนส่ง
+  const [pointsById, setPointsById] = useState<Record<number, string>>({})
+  const toggleProblem = (id: number) => {
     setSelectedProblems((prev) =>
       prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id]
     )
+    setPointsById((prev) => (prev[id] === undefined ? { ...prev, [id]: '10' } : prev))
+  }
 
   // เป้าหมาย: ห้อง (key = "level|room") และรายคน
   const [roomTargets, setRoomTargets] = useState<Set<string>>(new Set())
@@ -111,7 +115,7 @@ export default function AssignForm({
       )}
 
       {/* ชื่องาน + กำหนดส่ง */}
-      <div className="bg-white rounded-xl border border-gray-200 p-6">
+      <div className="bg-white rounded-2xl border border-indigo-100 shadow-sm p-6">
         <div className="flex flex-wrap gap-3">
           <div className="flex-1 min-w-64">
             <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -135,13 +139,19 @@ export default function AssignForm({
       </div>
 
       {/* เลือกโจทย์ */}
-      <div className="bg-white rounded-xl border border-gray-200 p-6">
+      <div className="bg-white rounded-2xl border border-indigo-100 shadow-sm p-6">
         <h2 className="text-base font-semibold text-gray-900 mb-1">
           เลือกโจทย์ ({selectedProblems.length} ข้อ)
         </h2>
         <p className="text-xs text-gray-400 mb-3">
           เลือกได้หลายข้อ — ลำดับที่เลือกคือลำดับข้อในงาน
         </p>
+        {selectedProblems.length > 0 && (
+          <p className="text-xs text-indigo-600 font-medium mb-3">
+            คะแนนรวม{' '}
+            {selectedProblems.reduce((sum, id) => sum + (Number(pointsById[id]) || 0), 0)} คะแนน
+          </p>
+        )}
         {problems.length === 0 ? (
           <p className="text-sm text-gray-400">ยังไม่มีโจทย์ในคลัง</p>
         ) : (
@@ -166,6 +176,21 @@ export default function AssignForm({
                   <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700 shrink-0">
                     {languageLabel(p.language)}
                   </span>
+                  {order >= 0 && (
+                    <span className="flex items-center gap-1.5 shrink-0">
+                      <input
+                        type="number"
+                        min={1}
+                        max={1000}
+                        value={pointsById[p.id] ?? '10'}
+                        onChange={(e) =>
+                          setPointsById((prev) => ({ ...prev, [p.id]: e.target.value }))
+                        }
+                        className="w-16 px-2 py-1 border border-gray-300 rounded-lg text-sm text-right focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                      <span className="text-xs text-gray-500">คะแนน</span>
+                    </span>
+                  )}
                 </label>
               )
             })}
@@ -173,8 +198,49 @@ export default function AssignForm({
         )}
       </div>
 
+      {/* นโยบายส่งซ้ำ */}
+      <div className="bg-white rounded-2xl border border-indigo-100 shadow-sm p-6">
+        <h2 className="text-base font-semibold text-gray-900 mb-1">การส่งซ้ำ</h2>
+        <p className="text-xs text-gray-400 mb-3">
+          นับเฉพาะการกด &quot;ส่งงาน&quot; — นักเรียนทดลองรันได้ไม่จำกัด
+          และคะแนนคิดจากครั้งที่ดีที่สุด ส่งซ้ำไม่ทำให้คะแนนที่ได้แล้วลดลง
+        </p>
+        <div className="flex flex-wrap gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              ส่งได้กี่ครั้งโดยไม่หักคะแนน
+            </label>
+            <input
+              type="number"
+              name="freeAttempts"
+              min={0}
+              max={99}
+              defaultValue={3}
+              className={`${inputClass} w-28`}
+            />
+            <p className="text-xs text-gray-400 mt-1">ใส่ 0 = ไม่จำกัด ไม่หักเลย</p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              เกินแล้วหักเพดานคะแนนครั้งละ (%)
+            </label>
+            <input
+              type="number"
+              name="penaltyPercent"
+              min={0}
+              max={100}
+              defaultValue={10}
+              className={`${inputClass} w-28`}
+            />
+            <p className="text-xs text-gray-400 mt-1">
+              เช่น หัก 10% — ส่งครั้งที่ 4 คะแนนเต็มเหลือ 90%
+            </p>
+          </div>
+        </div>
+      </div>
+
       {/* เป้าหมาย */}
-      <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-5">
+      <div className="bg-white rounded-2xl border border-indigo-100 shadow-sm p-6 space-y-5">
         <h2 className="text-base font-semibold text-gray-900">
           มอบหมายให้ ({roomTargets.size + studentTargets.size} รายการ)
         </h2>
@@ -334,7 +400,13 @@ export default function AssignForm({
         )}
       </div>
 
-      <input type="hidden" name="problemIds" value={JSON.stringify(selectedProblems)} />
+      <input
+        type="hidden"
+        name="problems"
+        value={JSON.stringify(
+          selectedProblems.map((id) => ({ id, points: Number(pointsById[id]) || 10 }))
+        )}
+      />
       <input type="hidden" name="targets" value={targetsJson} />
 
       <div className="flex justify-end">

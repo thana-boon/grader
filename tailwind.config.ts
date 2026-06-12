@@ -12,6 +12,7 @@ const config: Config = {
     extend: {
       fontFamily: {
         sans: ['Sarabun', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+        display: ['Mali', 'Sarabun', 'ui-sans-serif', 'system-ui', 'sans-serif'],
       },
     },
   },

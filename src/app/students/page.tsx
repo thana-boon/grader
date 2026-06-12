@@ -62,7 +62,7 @@ export default async function StudentsPage({
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-page">
       <Navbar user={user} />
       <main className="max-w-6xl mx-auto px-4 sm:px-6 py-6">
         {/* Header */}
@@ -77,7 +77,7 @@ export default async function StudentsPage({
         {/* Filters */}
         <form
           method="get"
-          className="bg-white rounded-xl border border-gray-200 p-4 mb-6 flex flex-wrap gap-3 items-end"
+          className="bg-white rounded-2xl border border-indigo-100 shadow-sm p-4 mb-6 flex flex-wrap gap-3 items-end"
         >
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -158,7 +158,7 @@ export default async function StudentsPage({
         </form>
 
         {/* Table */}
-        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <div className="bg-white rounded-2xl border border-indigo-100 shadow-sm overflow-hidden">
           {students.length === 0 ? (
             <div className="px-6 py-10 text-center text-gray-400 text-sm">
               ไม่พบนักเรียนตามเงื่อนไขที่เลือก

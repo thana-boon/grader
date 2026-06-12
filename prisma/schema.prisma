@@ -52,6 +52,8 @@ model Problem {
   testCases   TestCase[]
   assignments AssignmentProblem[] // งานที่มีโจทย์ข้อนี้
   submissions Submission[]
+  competitions           CompetitionProblem[]
+  competitionSubmissions CompetitionSubmission[]
 
   @@map("problems")
 }
@@ -78,6 +80,10 @@ model Assignment {
   academicYearId Int       @map("academic_year_id")
   semester       Int
   dueAt          DateTime? @map("due_at")
+  // นโยบายส่งซ้ำ: ส่งฟรี freeAttempts ครั้งแรก เกินแล้วหักเพดานคะแนนครั้งละ penaltyPercent%
+  // freeAttempts = 0 หมายถึงไม่จำกัด ไม่หักเลย — คิดคะแนนใน src/lib/scoring.ts
+  freeAttempts   Int       @default(0) @map("free_attempts")
+  penaltyPercent Int       @default(10) @map("penalty_percent")
   createdAt      DateTime  @default(now())
 
   problems    AssignmentProblem[]
@@ -93,6 +99,7 @@ model AssignmentProblem {
   assignmentId Int @map("assignment_id")
   problemId    Int @map("problem_id")
   sortOrder    Int @default(0) @map("sort_order")
+  points       Int @default(10) // คะแนนเต็มของข้อนี้ในงานนี้ — ครูตั้งตอนมอบหมาย
 
   assignment Assignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
   problem    Problem    @relation(fields: [problemId], references: [id], onDelete: Cascade)
@@ -132,6 +139,71 @@ model Submission {
 
   @@index([assignmentId, problemId, studentCode])
   @@map("submissions")
+}
+
+// การแข่งขัน — ผู้เข้าแข่งใช้บัญชีชั่วคราว (contestants) ล็อกอินเข้ามาแข่งในเวลาที่กำหนด
+model Competition {
+  id              Int       @id @default(autoincrement())
+  title           String
+  durationMinutes Int       @map("duration_minutes")
+  startedAt       DateTime? @map("started_at") // null = ยังไม่เริ่ม — กดเริ่มแล้วนับถอยหลัง
+  endedAt         DateTime? @map("ended_at") // ครูสั่งจบก่อนเวลา (ปกติจบเองเมื่อหมดเวลา)
+  createdAt       DateTime  @default(now())
+
+  problems    CompetitionProblem[]
+  contestants Contestant[]
+  submissions CompetitionSubmission[]
+
+  @@map("competitions")
+}
+
+model CompetitionProblem {
+  id            Int @id @default(autoincrement())
+  competitionId Int @map("competition_id")
+  problemId     Int @map("problem_id")
+  sortOrder     Int @default(0) @map("sort_order")
+  points        Int @default(10)
+
+  competition Competition @relation(fields: [competitionId], references: [id], onDelete: Cascade)
+  problem     Problem     @relation(fields: [problemId], references: [id], onDelete: Cascade)
+
+  @@unique([competitionId, problemId])
+  @@map("competition_problems")
+}
+
+// บัญชีชั่วคราวของผู้เข้าแข่ง — รหัสผ่านเก็บตรงๆ (ไม่ hash) เพื่อให้ครูพิมพ์แจกได้
+// ใช้ล็อกอินแข่งเท่านั้น เข้าส่วนอื่นของเว็บไม่ได้ และลบทิ้งพร้อมรายการแข่ง
+model Contestant {
+  id            Int      @id @default(autoincrement())
+  competitionId Int      @map("competition_id")
+  username      String   @unique
+  password      String
+  displayName   String   @map("display_name")
+  createdAt     DateTime @default(now())
+
+  competition Competition             @relation(fields: [competitionId], references: [id], onDelete: Cascade)
+  submissions CompetitionSubmission[]
+
+  @@map("contestants")
+}
+
+model CompetitionSubmission {
+  id            Int      @id @default(autoincrement())
+  competitionId Int      @map("competition_id")
+  problemId     Int      @map("problem_id")
+  contestantId  Int      @map("contestant_id")
+  code          String   @db.Text
+  passed        Int
+  total         Int
+  details       String?  @db.MediumText
+  createdAt     DateTime @default(now())
+
+  competition Competition @relation(fields: [competitionId], references: [id], onDelete: Cascade)
+  contestant  Contestant  @relation(fields: [contestantId], references: [id], onDelete: Cascade)
+  problem     Problem     @relation(fields: [problemId], references: [id], onDelete: Cascade)
+
+  @@index([competitionId, problemId, contestantId])
+  @@map("competition_submissions")
 }
 
 // ตารางนักเรียน — ถ้ามีอยู่แล้วให้ใช้ prisma db pull แทน

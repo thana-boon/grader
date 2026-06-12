@@ -24,7 +24,7 @@ export default async function AcademicYearPage() {
   )
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-page">
       <Navbar user={user} />
       <main className="max-w-4xl mx-auto px-4 sm:px-6 py-6">
         {/* Header */}
@@ -46,7 +46,7 @@ export default async function AcademicYearPage() {
         </div>
 
         {/* List */}
-        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <div className="bg-white rounded-2xl border border-indigo-100 shadow-sm overflow-hidden">
           <div className="px-6 py-4 border-b border-gray-100">
             <h2 className="text-base font-semibold text-gray-900">
               ปีการศึกษาทั้งหมด

@@ -5,10 +5,19 @@ import { prisma } from '@/lib/prisma'
 import { getActiveSetting } from '@/lib/academicYear'
 import { findSchoolStudentByCodeAndYear } from '@/lib/students'
 import { targetOrFilter } from '@/lib/assignments'
+import { bestScore, formatScore } from '@/lib/scoring'
+import Playground from '@/components/Playground'
 
-export default async function StudentDashboard() {
+export default async function StudentDashboard({
+  searchParams,
+}: {
+  searchParams: Promise<{ tab?: string }>
+}) {
   const user = await getCurrentUser()
   if (!user || user.role !== 'student') redirect('/login')
+
+  const { tab: tabParam } = await searchParams
+  const tab = tabParam === 'tasks' ? 'tasks' : 'ide'
 
   const activeYear = await getActiveSetting()
   const student = activeYear
@@ -24,12 +33,12 @@ export default async function StudentDashboard() {
             semester: activeYear.semester,
             targets: { some: { OR: targetOrFilter(student) } },
           },
-          include: { _count: { select: { problems: true } } },
+          include: { problems: { select: { problemId: true, points: true } } },
           orderBy: { createdAt: 'desc' },
         })
       : []
 
-  // ความคืบหน้า: นับข้อที่เคยส่งแล้ว และข้อที่ได้เต็ม ต่องาน
+  // ความคืบหน้า: การส่งทุกครั้ง เรียงเก่า→ใหม่ ต่อ (งาน, ข้อ) — ใช้คิดคะแนนครั้งที่ดีที่สุด
   const submissions =
     student && tasks.length
       ? await prisma.submission.findMany({
@@ -37,23 +46,30 @@ export default async function StudentDashboard() {
             assignmentId: { in: tasks.map((t) => t.id) },
             studentCode: student.student_code,
           },
-          orderBy: { createdAt: 'desc' },
+          orderBy: { createdAt: 'asc' },
         })
       : []
-  const latest = new Map<string, (typeof submissions)[number]>()
+  const byKey = new Map<string, typeof submissions>()
   for (const s of submissions) {
     const key = `${s.assignmentId}:${s.problemId}`
-    if (!latest.has(key)) latest.set(key, s)
+    const arr = byKey.get(key)
+    if (arr) arr.push(s)
+    else byKey.set(key, [s])
   }
-  const progress = (taskId: number) => {
+  const progress = (t: (typeof tasks)[number]) => {
+    const policy = { freeAttempts: t.freeAttempts, penaltyPercent: t.penaltyPercent }
     let done = 0
-    let full = 0
-    for (const [key, s] of latest) {
-      if (!key.startsWith(`${taskId}:`)) continue
-      done++
-      if (s.passed === s.total) full++
+    let score = 0
+    let totalPoints = 0
+    for (const p of t.problems) {
+      totalPoints += p.points
+      const subs = byKey.get(`${t.id}:${p.problemId}`)
+      if (subs) {
+        done++
+        score += bestScore(subs, p.points, policy)
+      }
     }
-    return { done, full }
+    return { done, score, totalPoints }
   }
 
   const now = new Date()
@@ -63,7 +79,7 @@ export default async function StudentDashboard() {
       {/* Header */}
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-gray-900">
-          สวัสดี, {user.name}
+          สวัสดี, {user.name} 👋
         </h1>
         <p className="text-gray-500 mt-1">
           รหัสนักเรียน: {user.studentCode}
@@ -72,8 +88,34 @@ export default async function StudentDashboard() {
         </p>
       </div>
 
+      {/* แท็บ: เขียนโค้ดอิสระ (IDE) / งานที่ได้รับมอบหมาย */}
+      <div className="flex flex-wrap gap-1 border-b border-gray-200 mb-4">
+        {[
+          { key: 'ide', label: '💻 เขียนโค้ด' },
+          { key: 'tasks', label: `📋 งานของฉัน (${tasks.length})` },
+        ].map((t) => (
+          <Link
+            key={t.key}
+            href={t.key === 'ide' ? '/dashboard/student' : '/dashboard/student?tab=tasks'}
+            className={`px-4 py-2 text-sm font-medium rounded-t-lg border-b-2 -mb-px transition ${
+              tab === t.key
+                ? 'border-indigo-600 text-indigo-700 bg-white'
+                : 'border-transparent text-gray-500 hover:text-indigo-600 hover:bg-gray-100'
+            }`}
+          >
+            {t.label}
+          </Link>
+        ))}
+      </div>
+
+      {tab === 'ide' && <Playground />}
+
       {/* งานที่ได้รับมอบหมาย */}
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <div
+        className={`bg-white rounded-2xl border border-indigo-100 shadow-sm overflow-hidden ${
+          tab === 'tasks' ? '' : 'hidden'
+        }`}
+      >
         <div className="px-6 py-4 border-b border-gray-100">
           <h2 className="text-base font-semibold text-gray-900">
             งานของฉัน ({tasks.length})
@@ -105,8 +147,8 @@ export default async function StudentDashboard() {
         ) : (
           <ul className="divide-y divide-gray-100">
             {tasks.map((t) => {
-              const { done, full } = progress(t.id)
-              const totalProblems = t._count.problems
+              const { done, score, totalPoints } = progress(t)
+              const totalProblems = t.problems.length
               const overdue = t.dueAt !== null && now > t.dueAt
               return (
                 <li key={t.id}>
@@ -139,13 +181,13 @@ export default async function StudentDashboard() {
                       {done > 0 ? (
                         <span
                           className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${
-                            full === totalProblems
+                            done === totalProblems && score >= totalPoints
                               ? 'bg-green-100 text-green-700'
                               : 'bg-amber-100 text-amber-700'
                           }`}
                         >
-                          ทำแล้ว {done}/{totalProblems} ข้อ
-                          {full > 0 && ` · เต็ม ${full}`}
+                          ทำแล้ว {done}/{totalProblems} ข้อ · ได้ {formatScore(score)}/
+                          {totalPoints} คะแนน
                         </span>
                       ) : (
                         <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-500">

@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { signJWT } from '@/lib/jwt'
+import { signJWT, SESSION_MINUTES } from '@/lib/jwt'
 import { getActiveSetting } from '@/lib/academicYear'
 import { findSchoolStudentsByCode } from '@/lib/students'
 import bcrypt from 'bcryptjs'
 
-const COOKIE_MAX_AGE = 60 * 60 * 24 * 7 // 7 วัน
+const COOKIE_MAX_AGE = 60 * SESSION_MINUTES // หมดอายุพร้อม token — ต่ออายุเมื่อมีการใช้งาน
 
 function setAuthCookie(response: NextResponse, token: string) {
   response.cookies.set('auth-token', token, {
@@ -48,6 +48,29 @@ export async function POST(request: NextRequest) {
     })
 
     const res = NextResponse.json({ success: true, redirectTo: '/dashboard/teacher' })
+    setAuthCookie(res, token)
+    return res
+  }
+
+  // ===== ลองเป็นผู้เข้าแข่งขัน (บัญชีชั่วคราว) =====
+  const contestant = await prisma.contestant.findUnique({
+    where: { username: username.trim() },
+  })
+
+  if (contestant) {
+    // รหัสผ่านบัญชีแข่งเก็บตรงๆ เพื่อให้ครูพิมพ์แจกได้
+    if (password !== contestant.password) {
+      return NextResponse.json({ error: 'รหัสผ่านไม่ถูกต้อง' }, { status: 401 })
+    }
+
+    const token = await signJWT({
+      userId: contestant.id,
+      role: 'contestant',
+      name: contestant.displayName,
+      competitionId: contestant.competitionId,
+    })
+
+    const res = NextResponse.json({ success: true, redirectTo: '/arena' })
     setAuthCookie(res, token)
     return res
   }

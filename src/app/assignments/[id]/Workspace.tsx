@@ -12,7 +12,10 @@ import {
   type ScratchStats,
 } from '@/lib/scratchGrading'
 import { languageLabel } from '@/lib/languages'
-import { submitAssignment } from '../actions'
+import { attemptMultiplier, formatScore } from '@/lib/scoring'
+import type { SubmittedResults } from '@/lib/submissionCheck'
+import type { SubmitResult } from '../actions'
+import CodeEditor from '@/components/CodeEditor'
 import ConfirmDialog from '@/components/ConfirmDialog'
 import TurtleCanvas from '@/components/TurtleCanvas'
 
@@ -30,8 +33,6 @@ type CaseResult = {
 }
 
 export default function Workspace({
-  assignmentId,
-  problemId,
   language,
   starterCode,
   testCases,
@@ -39,9 +40,12 @@ export default function Workspace({
   dataset,
   lastCode,
   canSubmit,
+  points,
+  attemptsUsed,
+  freeAttempts,
+  penaltyPercent,
+  onSubmit,
 }: {
-  assignmentId: number
-  problemId: number
   language: string
   starterCode: string
   testCases: WorkspaceTestCase[]
@@ -49,6 +53,12 @@ export default function Workspace({
   dataset: { name: string; content: string } | null
   lastCode: string | null
   canSubmit: boolean
+  points: number
+  attemptsUsed: number
+  freeAttempts: number
+  penaltyPercent: number
+  // server action ส่งคำตอบ — ผูกปลายทาง (งานมอบหมาย/การแข่งขัน) มาจากหน้า server แล้ว
+  onSubmit: (code: string, results: SubmittedResults) => Promise<SubmitResult>
 }) {
   const router = useRouter()
   const isTurtle = language === 'turtle'
@@ -122,25 +132,29 @@ export default function Workspace({
   const [myDrawing, setMyDrawing] = useState<string | null>(null)
   const [turtleError, setTurtleError] = useState<string | null>(null)
   const [similarity, setSimilarity] = useState<number | null>(null)
-  const [scoreModal, setScoreModal] = useState<{ passed: number; total: number } | null>(null)
+  const [scoreModal, setScoreModal] = useState<{
+    passed: number
+    total: number
+    score?: number
+    points?: number
+    multiplier?: number
+  } | null>(null)
   const [errorModal, setErrorModal] = useState<string | null>(null)
 
-  const visibleIndexes = testCases
-    .map((tc, i) => (tc.isHidden ? -1 : i))
-    .filter((i) => i >= 0)
+  // จำนวนครั้งที่ส่งแล้ว — เพิ่มทันทีหลังส่งสำเร็จ เพื่อให้คำเตือนหักคะแนนอัปเดต
+  const [attempts, setAttempts] = useState(attemptsUsed)
+  const policy = { freeAttempts, penaltyPercent }
+  const nextMultiplier = attemptMultiplier(attempts + 1, policy)
 
-  // กด Tab ใน editor = ย่อหน้า 4 ช่อง (ไม่ใช่ย้าย focus)
-  const handleTab = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key !== 'Tab') return
-    e.preventDefault()
-    const el = e.currentTarget
-    const { selectionStart, selectionEnd, value } = el
-    const next = value.slice(0, selectionStart) + '    ' + value.slice(selectionEnd)
-    setCode(next)
-    requestAnimationFrame(() => {
-      el.selectionStart = el.selectionEnd = selectionStart + 4
-    })
-  }
+  // Run (python/pandas/php) — รันโค้ดดู output ตรงๆ ไม่ตัดสินถูกผิด ไม่นับเป็นการส่ง
+  const [freeInput, setFreeInput] = useState('')
+  const [freeResult, setFreeResult] = useState<CaseResult | null>(null)
+  // modal ถาม input ตอนโค้ดเรียก input() — resolve(null) = ผู้ใช้กดหยุดรัน
+  const [inputModal, setInputModal] = useState<{
+    prompt: string
+    resolve: (v: string | null) => void
+  } | null>(null)
+  const [inputValue, setInputValue] = useState('')
 
   const runCases = async (indexes: number[]) => {
     if (!isPhp) {
@@ -216,6 +230,8 @@ export default function Workspace({
     return flags
   }
 
+  // ปุ่มทดลองรัน — เฉพาะโหมดที่ผลเป็นภาพ/เกณฑ์ (turtle, html, scratch)
+  // ภาษาอื่นใช้ "รันอิสระ" แทน และตรวจทุกเคสตอนกดส่งงานเท่านั้น
   const handleRun = async () => {
     if (isScratch) {
       runScratchChecks()
@@ -229,7 +245,48 @@ export default function Workspace({
     try {
       if (isTurtle) await runTurtle()
       else if (isHtml) runHtmlChecks()
-      else await runCases(visibleIndexes)
+    } finally {
+      setBusy('idle')
+    }
+  }
+
+  const handleFreeRun = async () => {
+    if (!code.trim()) {
+      setErrorModal('ยังไม่ได้เขียนโค้ด')
+      return
+    }
+    setBusy('run')
+    try {
+      // PHP รันบนเซิร์ฟเวอร์ จึงถาม input ระหว่างรันไม่ได้ — ใช้ช่องเตรียม input แทน
+      if (isPhp) {
+        setStatusMsg('กำลังรันโค้ด...')
+        const res = await runStudentCode(freeInput)
+        setFreeResult({ pass: res.ok, actual: res.output, error: res.error, timedOut: res.timedOut })
+        setStatusMsg(null)
+        return
+      }
+      const { pythonRunner } = await import('@/lib/pythonRunner')
+      setStatusMsg(
+        isPandas
+          ? 'กำลังโหลดตัวรัน Python + pandas (ครั้งแรกใช้เวลาสักครู่)...'
+          : 'กำลังโหลดตัวรัน Python (ครั้งแรกใช้เวลาสักครู่)...'
+      )
+      const warm = await pythonRunner.warmup(isPandas ? ['pandas'] : undefined)
+      if (warm.timedOut) {
+        setStatusMsg('โหลดตัวรัน Python ไม่สำเร็จ — ตรวจสอบอินเทอร์เน็ตแล้วลองใหม่')
+        return
+      }
+      setStatusMsg('กำลังรันโค้ด...')
+      // โหมดโต้ตอบ: โค้ดเรียก input() เมื่อไร จะเด้ง modal ให้พิมพ์เหมือนรันใน IDE จริง
+      const res = await pythonRunner.runInteractive(code, runOpts(), (promptText, outputSoFar) => {
+        setFreeResult({ pass: true, actual: outputSoFar, error: null, timedOut: false })
+        return new Promise<string | null>((resolve) => {
+          setInputValue('')
+          setInputModal({ prompt: promptText, resolve })
+        })
+      })
+      setFreeResult({ pass: res.ok, actual: res.output, error: res.error, timedOut: res.timedOut })
+      setStatusMsg(null)
     } finally {
       setBusy('idle')
     }
@@ -242,7 +299,7 @@ export default function Workspace({
     }
     setBusy('submit')
     try {
-      let payload: Parameters<typeof submitAssignment>[3]
+      let payload: SubmittedResults
       let codeToSend = code
       if (isTurtle) {
         const turtleResult = await runTurtle()
@@ -276,12 +333,19 @@ export default function Workspace({
         payload = all.map((r) => r?.pass === true)
       }
       setStatusMsg('กำลังบันทึกผล...')
-      const res = await submitAssignment(assignmentId, problemId, codeToSend, payload)
+      const res = await onSubmit(codeToSend, payload)
       setStatusMsg(null)
       if (res.error) {
         setErrorModal(res.error)
       } else {
-        setScoreModal({ passed: res.passed ?? 0, total: res.total ?? 0 })
+        setScoreModal({
+          passed: res.passed ?? 0,
+          total: res.total ?? 0,
+          score: res.score,
+          points: res.points,
+          multiplier: res.multiplier,
+        })
+        setAttempts(res.attempt ?? attempts + 1)
         router.refresh()
       }
     } finally {
@@ -310,7 +374,7 @@ export default function Workspace({
     <div className="space-y-4">
       {/* ไฟล์ข้อมูลแนบ (pandas) */}
       {dataset && (
-        <div className="bg-white rounded-xl border border-gray-200 p-5">
+        <div className="bg-white rounded-2xl border border-indigo-100 shadow-sm p-5">
           <h2 className="text-base font-semibold text-gray-900 mb-1">
             📄 ไฟล์ข้อมูล: <code className="text-indigo-700">{dataset.name}</code>
           </h2>
@@ -335,7 +399,7 @@ export default function Workspace({
       {/* โหมด scratch: อัปโหลดไฟล์ + เกณฑ์ */}
       {isScratch && (
         <>
-          <div className="bg-white rounded-xl border border-gray-200 p-5">
+          <div className="bg-white rounded-2xl border border-indigo-100 shadow-sm p-5">
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-base font-semibold text-gray-900">
                 🧩 ไฟล์งาน Scratch ของฉัน
@@ -379,7 +443,7 @@ export default function Workspace({
             </p>
           </div>
 
-          <div className="bg-white rounded-xl border border-gray-200 p-5">
+          <div className="bg-white rounded-2xl border border-indigo-100 shadow-sm p-5">
             <h2 className="text-base font-semibold text-gray-900 mb-3">
               เกณฑ์การตรวจ ({testCases.length} ข้อ)
             </h2>
@@ -410,19 +474,30 @@ export default function Workspace({
       )}
 
       {/* Editor */}
-      <div className={`bg-white rounded-xl border border-gray-200 overflow-hidden ${isScratch ? 'hidden' : ''}`}>
+      <div className={`bg-white rounded-2xl border border-indigo-100 shadow-sm overflow-hidden ${isScratch ? 'hidden' : ''}`}>
         <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-100 bg-gray-50">
           <p className="text-sm font-medium text-gray-700">
             โค้ดของฉัน ({languageLabel(language)})
           </p>
           <div className="flex gap-2">
-            <button
-              onClick={handleRun}
-              disabled={busy !== 'idle'}
-              className="px-4 py-1.5 text-sm font-medium text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition disabled:opacity-60"
-            >
-              {busy === 'run' ? 'กำลังรัน...' : '▶ ทดลองรัน'}
-            </button>
+            {(isTurtle || isHtml) && (
+              <button
+                onClick={handleRun}
+                disabled={busy !== 'idle'}
+                className="px-4 py-1.5 text-sm font-medium text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition disabled:opacity-60"
+              >
+                {busy === 'run' ? 'กำลังรัน...' : '▶ ทดลองรัน'}
+              </button>
+            )}
+            {!isTurtle && !isHtml && !isScratch && (
+              <button
+                onClick={handleFreeRun}
+                disabled={busy !== 'idle'}
+                className="px-4 py-1.5 text-sm font-medium text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition disabled:opacity-60"
+              >
+                {busy === 'run' ? 'กำลังรัน...' : '▶ Run'}
+              </button>
+            )}
             <button
               onClick={handleSubmit}
               disabled={busy !== 'idle' || !canSubmit}
@@ -432,21 +507,90 @@ export default function Workspace({
             </button>
           </div>
         </div>
-        <textarea
+        <CodeEditor
           value={code}
-          onChange={(e) => setCode(e.target.value)}
-          onKeyDown={handleTab}
-          rows={14}
-          spellCheck={false}
-          placeholder="# เขียนโค้ด Python ของคุณที่นี่"
-          className="w-full px-4 py-3 font-mono text-sm focus:outline-none resize-y"
+          onChange={setCode}
+          language={language}
+          placeholder={
+            isHtml
+              ? '<!-- เขียนโค้ด HTML ของคุณที่นี่ -->'
+              : isPhp
+                ? '<?php // เขียนโค้ด PHP ของคุณที่นี่'
+                : '# เขียนโค้ด Python ของคุณที่นี่'
+          }
         />
       </div>
+
+      {/* Terminal — แสดงผลการกด Run (ปุ่มอยู่บนหัว editor) ไม่นับเป็นการส่ง */}
+      {!isTurtle && !isHtml && !isScratch && (
+        <div className="bg-white rounded-2xl border border-indigo-100 shadow-sm p-5">
+          <h2 className="text-base font-semibold text-gray-900 mb-1">🖥️ Terminal</h2>
+          <p className="text-xs text-gray-400 mb-3">
+            {isPhp
+              ? 'ใส่ input ที่อยากลอง (ถ้ามี) แล้วกด Run — ไม่นับเป็นการส่ง'
+              : 'รันโค้ดเหมือนในเครื่องจริง — ถ้าโค้ดเรียก input() จะมีช่องเด้งให้พิมพ์ทีละค่า ลองได้ไม่จำกัด ไม่นับเป็นการส่ง'}
+          </p>
+          {isPhp && (
+            <div className="mb-3">
+              <p className="text-xs text-gray-400 mb-1">
+                Input (ถ้าโปรแกรมอ่าน STDIN ให้ใส่บรรทัดละหนึ่งค่า)
+              </p>
+              <textarea
+                value={freeInput}
+                onChange={(e) => setFreeInput(e.target.value)}
+                rows={3}
+                spellCheck={false}
+                placeholder="ใส่ input ที่อยากลอง (เว้นว่างได้)"
+                className="w-full bg-gray-50 border border-gray-200 rounded-lg p-2 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-y"
+              />
+            </div>
+          )}
+          <pre className="bg-gray-900 rounded-lg p-3 font-mono text-xs whitespace-pre-wrap min-h-24 text-gray-100">
+            {freeResult ? (
+              <>
+                {freeResult.actual}
+                {freeResult.timedOut ? (
+                  <span className="text-red-400">
+                    {'\n(รันนานเกินไป — อาจวน loop ไม่รู้จบ)'}
+                  </span>
+                ) : freeResult.error ? (
+                  <span className="text-red-400">
+                    {(freeResult.actual ? '\n' : '') + freeResult.error}
+                  </span>
+                ) : (
+                  !freeResult.actual && <span className="text-gray-500">(ไม่มี output)</span>
+                )}
+              </>
+            ) : (
+              <span className="text-gray-500">
+                {isPhp
+                  ? 'กด "Run" เพื่อดูผลลัพธ์'
+                  : 'กด "Run" เพื่อเริ่ม — ถ้าโค้ดมี input() จะมีช่องเด้งให้พิมพ์'}
+              </span>
+            )}
+          </pre>
+        </div>
+      )}
 
       {!canSubmit && (
         <p className="text-sm text-red-600">
           เลยกำหนดส่งแล้ว — ทดลองรันได้ แต่ส่งงานไม่ได้
         </p>
+      )}
+
+      {/* สถานะครั้งที่ส่ง — เตือนก่อนโดนหักเพดานคะแนน */}
+      {canSubmit && freeAttempts > 0 && (
+        <div
+          className={`p-3 rounded-lg border text-sm ${
+            nextMultiplier < 1
+              ? 'bg-amber-50 border-amber-200 text-amber-800'
+              : 'bg-gray-50 border-gray-200 text-gray-600'
+          }`}
+        >
+          {nextMultiplier < 1
+            ? `ส่งแล้ว ${attempts} ครั้ง (โควตาไม่หักคะแนน ${freeAttempts} ครั้ง) — ส่งครั้งถัดไปคะแนนเต็มจะเหลือ ${Math.round(nextMultiplier * 100)}% ของ ${points} คะแนน · คะแนนคิดจากครั้งที่ดีที่สุด ส่งซ้ำไม่ทำให้คะแนนที่ได้แล้วลดลง`
+            : `ส่งแล้ว ${attempts}/${freeAttempts} ครั้ง — ส่งได้อีก ${freeAttempts - attempts} ครั้งโดยไม่หักคะแนน (ข้อนี้ ${points} คะแนน)`}
+        </div>
       )}
 
       {statusMsg && (
@@ -458,7 +602,7 @@ export default function Workspace({
       {/* โหมด html: ตัวอย่างหน้าเว็บสด + ผลเกณฑ์ */}
       {isHtml && (
         <>
-          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+          <div className="bg-white rounded-2xl border border-indigo-100 shadow-sm overflow-hidden">
             <div className="px-4 py-2.5 border-b border-gray-100 bg-gray-50">
               <p className="text-sm font-medium text-gray-700">
                 🌐 ตัวอย่างหน้าเว็บ (อัปเดตตามโค้ดทันที)
@@ -472,7 +616,7 @@ export default function Workspace({
             />
           </div>
 
-          <div className="bg-white rounded-xl border border-gray-200 p-5">
+          <div className="bg-white rounded-2xl border border-indigo-100 shadow-sm p-5">
             <h2 className="text-base font-semibold text-gray-900 mb-3">
               เกณฑ์การตรวจ ({testCases.length} ข้อ)
             </h2>
@@ -504,7 +648,7 @@ export default function Workspace({
 
       {/* โหมด turtle: ภาพเป้าหมาย vs ภาพของฉัน */}
       {isTurtle && (
-        <div className="bg-white rounded-xl border border-gray-200 p-5">
+        <div className="bg-white rounded-2xl border border-indigo-100 shadow-sm p-5">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-base font-semibold text-gray-900">ผลการวาด</h2>
             {similarity !== null && (
@@ -541,8 +685,9 @@ export default function Workspace({
       )}
 
       {/* ผลรายเคส */}
-      <div className={`bg-white rounded-xl border border-gray-200 p-5 ${isTurtle || isHtml ? 'hidden' : ''}`}>
-        <h2 className="text-base font-semibold text-gray-900 mb-3">ผลการตรวจ</h2>
+      <div className={`bg-white rounded-2xl border border-indigo-100 shadow-sm p-5 ${isTurtle || isHtml || isScratch ? 'hidden' : ''}`}>
+        <h2 className="text-base font-semibold text-gray-900 mb-1">เคสทดสอบ</h2>
+        <p className="text-xs text-gray-400 mb-3">ตรวจทุกเคสตอนกด &quot;ส่งงาน&quot;</p>
         <div className="space-y-3">
           {testCases.map((tc, i) => {
             const r = results[i]
@@ -595,7 +740,7 @@ export default function Workspace({
                           : r.error
                             ? r.error
                             : r.actual || '(ไม่มี output)'
-                        : 'ยังไม่ได้รัน'}
+                        : 'แสดงหลังกดส่งงาน'}
                     </pre>
                   </div>
                 </div>
@@ -605,7 +750,58 @@ export default function Workspace({
         </div>
       </div>
 
-      {/* Modals */}
+      {/* Modal ถาม input ตอนโค้ดเรียก input() — ปิดด้วยการตอบหรือหยุดรันเท่านั้น */}
+      {inputModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/40" />
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              inputModal.resolve(inputValue)
+              setInputModal(null)
+            }}
+            className="relative bg-white rounded-xl shadow-xl w-full max-w-sm p-6"
+          >
+            <div className="flex items-start gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full flex items-center justify-center shrink-0 bg-indigo-100 text-indigo-600 font-mono font-bold">
+                &gt;_
+              </div>
+              <div className="min-w-0 pt-1">
+                <h3 className="text-base font-semibold text-gray-900">โปรแกรมรอ input</h3>
+                <p className="text-sm text-gray-600 mt-1.5 whitespace-pre-wrap font-mono">
+                  {inputModal.prompt.trim() || 'พิมพ์ค่าแล้วกด Enter'}
+                </p>
+              </div>
+            </div>
+            <input
+              autoFocus
+              value={inputValue}
+              onChange={(e) => setInputValue(e.target.value)}
+              spellCheck={false}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+            <div className="flex justify-end gap-2 mt-4">
+              <button
+                type="button"
+                onClick={() => {
+                  inputModal.resolve(null)
+                  setInputModal(null)
+                }}
+                className="px-4 py-2 text-sm font-medium text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50 transition"
+              >
+                หยุดรัน
+              </button>
+              <button
+                type="submit"
+                className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition"
+              >
+                ตกลง (Enter)
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
       <ConfirmDialog
         open={scoreModal !== null}
         title="ส่งงานเรียบร้อย"
@@ -615,6 +811,14 @@ export default function Workspace({
                 isTurtle
                   ? `ภาพเหมือนเฉลย ${scoreModal.passed}%`
                   : `ผ่าน ${scoreModal.passed} จาก ${scoreModal.total} เคส`
+              }${
+                scoreModal.score !== undefined && scoreModal.points !== undefined
+                  ? `\nได้ ${formatScore(scoreModal.score)} จาก ${scoreModal.points} คะแนน${
+                      scoreModal.multiplier !== undefined && scoreModal.multiplier < 1
+                        ? ` (เพดานคะแนนครั้งนี้ ${Math.round(scoreModal.multiplier * 100)}% จากการส่งเกินโควตา)`
+                        : ''
+                    }`
+                  : ''
               }${
                 scoreModal.passed === scoreModal.total
                   ? ' 🎉 เยี่ยมมาก!'
