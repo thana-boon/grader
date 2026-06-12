@@ -6,6 +6,7 @@
 
 import { useEffect } from 'react'
 import { useRouter } from 'next/navigation'
+import { withBase } from '@/lib/basePath'
 
 const IDLE_MS = 30 * 60 * 1000 // ต้องเท่ากับ SESSION_MINUTES ใน src/lib/jwt.ts
 const PING_MS = 5 * 60 * 1000 // ต่ออายุ token ทุก 5 นาทีระหว่างยังใช้งาน
@@ -33,13 +34,13 @@ export default function SessionGuard() {
 
     const interval = window.setInterval(async () => {
       if (Date.now() - lastActivity >= IDLE_MS) {
-        await fetch('/api/auth/logout', { method: 'POST' }).catch(() => {})
+        await fetch(withBase('/api/auth/logout'), { method: 'POST' }).catch(() => {})
         router.replace('/login')
         return
       }
       if (Date.now() - lastPing >= PING_MS) {
         lastPing = Date.now()
-        const r = await fetch('/api/auth/refresh', { method: 'POST' }).catch(() => null)
+        const r = await fetch(withBase('/api/auth/refresh'), { method: 'POST' }).catch(() => null)
         if (r && r.status === 401) router.replace('/login')
       }
     }, CHECK_MS)

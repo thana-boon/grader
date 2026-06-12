@@ -1,9 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { verifyJWT, renewJWT, SESSION_MINUTES } from '@/lib/jwt'
+import { verifyJWT, renewJWT, SESSION_MINUTES, COOKIE_SECURE } from '@/lib/jwt'
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
   const token = request.cookies.get('auth-token')?.value
+
+  // สร้าง redirect จาก nextUrl.clone() แทน new URL(path, request.url)
+  // เพราะ nextUrl เก็บ basePath (เช่น '/grader') ไว้ให้ — new URL จะได้ URL ที่ขาด basePath
+  const redirectTo = (path: string) => {
+    const url = request.nextUrl.clone()
+    url.pathname = path
+    url.search = ''
+    return NextResponse.redirect(url)
+  }
 
   // หน้า login — ถ้า login แล้วให้ redirect ไป dashboard
   if (pathname === '/login') {
@@ -16,7 +25,7 @@ export async function middleware(request: NextRequest) {
             : user.role === 'contestant'
               ? '/arena'
               : '/dashboard/student'
-        return NextResponse.redirect(new URL(home, request.url))
+        return redirectTo(home)
       }
     }
     return NextResponse.next()
@@ -24,12 +33,12 @@ export async function middleware(request: NextRequest) {
 
   // ทุก route อื่น ต้องล็อกอินก่อน
   if (!token) {
-    return NextResponse.redirect(new URL('/login', request.url))
+    return redirectTo('/login')
   }
 
   const user = await verifyJWT(token)
   if (!user) {
-    const res = NextResponse.redirect(new URL('/login', request.url))
+    const res = redirectTo('/login')
     res.cookies.delete('auth-token')
     return res
   }
@@ -40,20 +49,18 @@ export async function middleware(request: NextRequest) {
 
   // ผู้เข้าแข่งขัน — เข้าได้เฉพาะสนามแข่ง ส่วนคนอื่นห้ามเข้าสนามแข่ง
   if (user.role === 'contestant' && !matchSegment('/arena')) {
-    return NextResponse.redirect(new URL('/arena', request.url))
+    return redirectTo('/arena')
   }
   if (matchSegment('/arena') && user.role !== 'contestant') {
-    return NextResponse.redirect(
-      new URL(user.role === 'teacher' ? '/dashboard/teacher' : '/dashboard/student', request.url)
-    )
+    return redirectTo(user.role === 'teacher' ? '/dashboard/teacher' : '/dashboard/student')
   }
 
   // Role-based access
   if (pathname.startsWith('/dashboard/teacher') && user.role !== 'teacher') {
-    return NextResponse.redirect(new URL('/dashboard/student', request.url))
+    return redirectTo('/dashboard/student')
   }
   if (pathname.startsWith('/dashboard/student') && user.role !== 'student') {
-    return NextResponse.redirect(new URL('/dashboard/teacher', request.url))
+    return redirectTo('/dashboard/teacher')
   }
   const teacherOnly = [
     '/academic_year',
@@ -64,22 +71,22 @@ export async function middleware(request: NextRequest) {
     '/compete',
   ]
   if (teacherOnly.some(matchSegment) && user.role !== 'teacher') {
-    return NextResponse.redirect(new URL('/dashboard/student', request.url))
+    return redirectTo('/dashboard/student')
   }
   // จัดการผู้ใช้ — เฉพาะผู้ดูแลระบบ (หน้า /teachers เช็คซ้ำกับ DB อีกชั้น)
   if (matchSegment('/teachers') && !user.isAdmin) {
-    return NextResponse.redirect(new URL('/dashboard/teacher', request.url))
+    return redirectTo('/dashboard/teacher')
   }
   // หน้าทำงาน — เฉพาะนักเรียน
   if (matchSegment('/assignments') && user.role !== 'student') {
-    return NextResponse.redirect(new URL('/dashboard/teacher', request.url))
+    return redirectTo('/dashboard/teacher')
   }
 
   // ต่ออายุ session ทุกครั้งที่มีการใช้งาน (sliding) — เงียบครบ 30 นาที token จะหมดอายุเอง
   const res = NextResponse.next()
   res.cookies.set('auth-token', await renewJWT(user), {
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
+    secure: COOKIE_SECURE,
     sameSite: 'lax',
     maxAge: 60 * SESSION_MINUTES,
     path: '/',

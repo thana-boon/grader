@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { signJWT, SESSION_MINUTES } from '@/lib/jwt'
+import { signJWT, SESSION_MINUTES, COOKIE_SECURE } from '@/lib/jwt'
 import { getActiveSetting } from '@/lib/academicYear'
 import { findSchoolStudentsByCode } from '@/lib/students'
 import bcrypt from 'bcryptjs'
@@ -10,7 +10,7 @@ const COOKIE_MAX_AGE = 60 * SESSION_MINUTES // หมดอายุพร้อ
 function setAuthCookie(response: NextResponse, token: string) {
   response.cookies.set('auth-token', token, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
+    secure: COOKIE_SECURE,
     sameSite: 'lax',
     maxAge: COOKIE_MAX_AGE,
     path: '/',

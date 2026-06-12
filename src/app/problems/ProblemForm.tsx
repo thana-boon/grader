@@ -3,6 +3,7 @@
 import { useActionState, useState } from 'react'
 import type { ActionResult } from './actions'
 import TurtleCanvas from '@/components/TurtleCanvas'
+import { withBase } from '@/lib/basePath'
 import {
   describeCheck,
   evaluateHtml,
@@ -250,7 +251,7 @@ export default function ProblemForm({
   // รันเฉลยหนึ่งครั้ง — PHP ส่งไปรันบนเซิร์ฟเวอร์, ที่เหลือรันในเบราว์เซอร์ (Pyodide)
   const runSolutionOnce = async (input: string) => {
     if (isPhp) {
-      const r = await fetch('/api/run/php', {
+      const r = await fetch(withBase('/api/run/php'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ code: solutionCode, stdin: input }),

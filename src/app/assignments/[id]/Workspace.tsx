@@ -18,6 +18,7 @@ import type { SubmitResult } from '../actions'
 import CodeEditor from '@/components/CodeEditor'
 import ConfirmDialog from '@/components/ConfirmDialog'
 import TurtleCanvas from '@/components/TurtleCanvas'
+import { withBase } from '@/lib/basePath'
 
 export type WorkspaceTestCase = {
   input: string
@@ -111,7 +112,7 @@ export default function Workspace({
   // รันโค้ดหนึ่งครั้ง — PHP ส่งไปรันบนเซิร์ฟเวอร์, ที่เหลือรันในเบราว์เซอร์
   const runStudentCode = async (input: string) => {
     if (isPhp) {
-      const r = await fetch('/api/run/php', {
+      const r = await fetch(withBase('/api/run/php'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ code, stdin: input }),
@@ -314,7 +315,7 @@ export default function Workspace({
         setStatusMsg('กำลังอัปโหลดไฟล์...')
         const fd = new FormData()
         fd.append('file', sb3File)
-        const up = await fetch('/api/scratch/upload', { method: 'POST', body: fd })
+        const up = await fetch(withBase('/api/scratch/upload'), { method: 'POST', body: fd })
         const upJson = await up.json().catch(() => null)
         if (!up.ok || !upJson?.token) {
           setStatusMsg(null)

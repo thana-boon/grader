@@ -3,6 +3,7 @@
 import { useActionState, useEffect, useState } from 'react'
 import { createTask, type ActionResult } from '../actions'
 import { languageLabel } from '@/lib/languages'
+import { withBase } from '@/lib/basePath'
 
 type ProblemOption = { id: number; title: string; language: string }
 
@@ -71,7 +72,7 @@ export default function AssignForm({
     setLoadingStudents(true)
     const params = new URLSearchParams({ level: pickLevel })
     if (pickRoom) params.set('room', pickRoom)
-    fetch(`/api/students?${params}`)
+    fetch(withBase(`/api/students?${params}`))
       .then((r) => r.json())
       .then((d) => {
         if (!cancelled) setStudents(d.students ?? [])

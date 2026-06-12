@@ -9,6 +9,7 @@ import {
   type SchoolStudent,
 } from '@/lib/students'
 import { languageLabel } from '@/lib/languages'
+import { withBase } from '@/lib/basePath'
 import { bestScore, formatScore } from '@/lib/scoring'
 import Navbar from '@/components/Navbar'
 import TurtleCanvas from '@/components/TurtleCanvas'
@@ -166,7 +167,7 @@ export default async function AssignmentDetailPage({
             <h1 className="text-2xl font-bold text-gray-900 min-w-0">{task.title}</h1>
             <div className="shrink-0 flex items-center gap-2">
               <a
-                href={`/assign/${task.id}/export`}
+                href={withBase(`/assign/${task.id}/export`)}
                 className="px-4 py-2 text-sm font-medium text-green-700 bg-green-50 hover:bg-green-100 rounded-lg transition"
               >
                 ⬇ Export Excel
@@ -322,7 +323,7 @@ export default async function AssignmentDetailPage({
                                       {p.language === 'scratch' &&
                                         scratchFileToken(l.details) && (
                                           <a
-                                            href={`/api/scratch/file?token=${scratchFileToken(l.details)}`}
+                                            href={withBase(`/api/scratch/file?token=${scratchFileToken(l.details)}`)}
                                             className="inline-block mb-1 text-xs text-indigo-600 hover:underline"
                                           >
                                             ⬇ ดาวน์โหลดไฟล์ .sb3 (เปิดดูใน Scratch ได้)

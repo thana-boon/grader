@@ -1,5 +1,8 @@
 generator client {
   provider = "prisma-client-js"
+  // ใช้ binary engine เพราะ Node บน server (Windows Server 2012 R2) เป็น 32-bit
+  // ซึ่งไม่รองรับ engine แบบ library (Node-API) — binary ทำงานได้ทั้งสองเครื่อง
+  engineType = "binary"
 }
 
 datasource db {

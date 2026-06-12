@@ -2,6 +2,7 @@
 
 import { useRouter } from 'next/navigation'
 import { useState } from 'react'
+import { withBase } from '@/lib/basePath'
 
 export default function LogoutButton() {
   const router = useRouter()
@@ -9,7 +10,7 @@ export default function LogoutButton() {
 
   const handleLogout = async () => {
     setLoading(true)
-    await fetch('/api/auth/logout', { method: 'POST' })
+    await fetch(withBase('/api/auth/logout'), { method: 'POST' })
     router.push('/login')
     router.refresh()
   }

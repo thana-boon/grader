@@ -19,6 +19,10 @@ const secret = () =>
 export const SESSION_MINUTES = 30
 const EXPIRES_IN = `${SESSION_MINUTES}m`
 
+// เว็บถูกเสิร์ฟผ่าน http ในวง LAN — เปิด Secure cookie ไม่ได้ (เบราว์เซอร์จะทิ้ง cookie ทำให้ login ไม่ติด)
+// ถ้าวันหน้าย้ายไปใช้ https ค่อยตั้ง COOKIE_SECURE="true" ใน .env
+export const COOKIE_SECURE = process.env.COOKIE_SECURE === 'true'
+
 export async function signJWT(payload: JWTPayload): Promise<string> {
   return new SignJWT({ ...payload })
     .setProtectedHeader({ alg: 'HS256' })

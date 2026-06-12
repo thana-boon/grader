@@ -6,6 +6,7 @@
 import { useEffect, useRef, useState } from 'react'
 import CodeEditor from '@/components/CodeEditor'
 import TurtleCanvas from '@/components/TurtleCanvas'
+import { withBase } from '@/lib/basePath'
 
 const LANGS = [
   { key: 'python', label: 'Python' },
@@ -82,7 +83,7 @@ export default function Playground() {
     try {
       if (isPhp) {
         setStatusMsg('กำลังรันโค้ด...')
-        const r = await fetch('/api/run/php', {
+        const r = await fetch(withBase('/api/run/php'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ code, stdin: phpInput }),
