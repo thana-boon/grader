@@ -2,8 +2,12 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { signJWT, SESSION_MINUTES, COOKIE_SECURE } from '@/lib/jwt'
 import { getActiveSetting } from '@/lib/academicYear'
-import { findSchoolStudentsByCode } from '@/lib/students'
+import { findSchoolStudentForLogin } from '@/lib/students'
+import { verifyStudent } from '@/lib/studentApi'
 import bcrypt from 'bcryptjs'
+
+// รหัสผ่านนักเรียน = "Skdw" + เลขบัตรประชาชน 13 หลัก
+const STUDENT_PASSWORD_PREFIX = 'Skdw'
 
 const COOKIE_MAX_AGE = 60 * SESSION_MINUTES // หมดอายุพร้อม token — ต่ออายุเมื่อมีการใช้งาน
 
@@ -76,18 +80,18 @@ export async function POST(request: NextRequest) {
   }
 
   // ===== ลองเป็นนักเรียน =====
-  // ไม่ต้องสร้างบัญชี — ตรวจกับข้อมูลนักเรียนใน school_app โดยตรง
-  // username: รหัสนักเรียนแบบ 5 หลัก (เติม 0 ข้างหน้า), password: Skdw + เลขบัตรประชาชน
-  const candidates = await findSchoolStudentsByCode(username)
+  // ไม่ต้องสร้างบัญชี — ตรวจกับ Student API กลาง
+  // username: รหัสนักเรียน (เติม 0 ข้างหน้าได้), password: Skdw + เลขบัตรประชาชน 13 หลัก
+  const active = await getActiveSetting()
+  const student = await findSchoolStudentForLogin(username, active?.academicYearId)
 
-  if (candidates.length > 0) {
-    // นักเรียนคนเดียวกันมีแถวได้หลายปี — ใช้แถวของปีที่เว็บตั้งใช้งานอยู่ก่อน ไม่มีก็ใช้ปีล่าสุด
-    const active = await getActiveSetting()
-    const student =
-      candidates.find((c) => c.year_id === active?.academicYearId) ?? candidates[0]
-
-    const expectedPassword = student.citizen_id ? `Skdw${student.citizen_id}` : null
-    if (!expectedPassword || password !== expectedPassword) {
+  if (student) {
+    // ตัด prefix เอาเลขบัตรประชาชนจากรหัสผ่าน แล้วยืนยันผ่าน API (ไม่อ่าน citizen_id ตรงๆ)
+    const citizenId = password.startsWith(STUDENT_PASSWORD_PREFIX)
+      ? password.slice(STUDENT_PASSWORD_PREFIX.length)
+      : ''
+    const matched = citizenId ? await verifyStudent(student.student_code, citizenId) : false
+    if (!matched) {
       return NextResponse.json({ error: 'รหัสผ่านไม่ถูกต้อง' }, { status: 401 })
     }
 

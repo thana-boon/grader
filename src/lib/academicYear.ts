@@ -1,7 +1,8 @@
 import { prisma } from '@/lib/prisma'
+import { getAcademicYears } from '@/lib/studentApi'
 
-// ปีการศึกษาเป็นข้อมูลกลางของโรงเรียน อยู่ใน database school_app (คนละ DB กับ codegrader)
-// Prisma ผูก datasource ได้ทีละ database จึงอ่านข้าม DB ผ่าน raw query — อ่านอย่างเดียวเท่านั้น
+// ปีการศึกษาเป็นข้อมูลกลางของโรงเรียน ดึงจาก Student API (เดิมอ่านตรงจาก school_app)
+// เว็บนี้เก็บแค่ "ปี/เทอมที่เลือกใช้งาน" (active_setting แถวเดียว id=1) ใน DB ของ codegrader เอง
 
 export type SchoolAcademicYear = {
   id: number
@@ -9,20 +10,11 @@ export type SchoolAcademicYear = {
   title: string
 }
 
-// id ของตารางเป็น INT UNSIGNED ซึ่ง Prisma คืนเป็น BigInt — แปลงเป็น number ก่อนใช้
-type RawYearRow = { id: number | bigint; year_be: number; title: string }
-
-function toYear(row: RawYearRow): SchoolAcademicYear {
-  return { id: Number(row.id), year_be: row.year_be, title: row.title }
-}
-
 export async function getSchoolAcademicYears(): Promise<SchoolAcademicYear[]> {
-  const rows = await prisma.$queryRaw<RawYearRow[]>`
-    SELECT id, year_be, title
-    FROM school_app.academic_years
-    ORDER BY year_be DESC
-  `
-  return rows.map(toYear)
+  const { years } = await getAcademicYears()
+  return years
+    .map((y) => ({ id: y.id, year_be: y.year_be, title: y.title }))
+    .sort((a, b) => b.year_be - a.year_be)
 }
 
 export type ActiveAcademicSetting = {
@@ -36,13 +28,10 @@ export async function getActiveSetting(): Promise<ActiveAcademicSetting | null> 
   const setting = await prisma.activeSetting.findUnique({ where: { id: 1 } })
   if (!setting) return null
 
-  const rows = await prisma.$queryRaw<RawYearRow[]>`
-    SELECT id, year_be, title
-    FROM school_app.academic_years
-    WHERE id = ${setting.academicYearId}
-  `
-  if (rows.length === 0) return null
-  const year = toYear(rows[0])
+  const { years } = await getAcademicYears()
+  const match = years.find((y) => y.id === setting.academicYearId)
+  if (!match) return null
+  const year = { id: match.id, year_be: match.year_be, title: match.title }
 
   return {
     academicYearId: setting.academicYearId,
