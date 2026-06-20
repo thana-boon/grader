@@ -55,15 +55,28 @@ export default async function TeachersPage() {
                         <span className="text-gray-400 font-normal"> (คุณ)</span>
                       )}
                     </p>
-                    <p className="text-xs text-gray-500">@{t.username}</p>
+                    <p className="text-xs text-gray-500">
+                      {t.teacherCode ? `รหัสครู ${t.teacherCode}` : `@${t.username}`}
+                    </p>
                   </div>
+                  {t.teacherCode && (
+                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-sky-100 text-sky-700">
+                      จาก API
+                    </span>
+                  )}
                   {t.is_admin && (
                     <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">
                       ผู้ดูแลระบบ
                     </span>
                   )}
                 </div>
-                <TeacherActions id={t.id} name={t.name} isSelf={t.id === me.id} />
+                <TeacherActions
+                  id={t.id}
+                  name={t.name}
+                  isSelf={t.id === me.id}
+                  isAdmin={t.is_admin}
+                  isApiTeacher={t.teacherCode !== null}
+                />
               </li>
             ))}
           </ul>

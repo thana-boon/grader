@@ -1,22 +1,39 @@
 'use client'
 
 import { useState, useTransition, useActionState } from 'react'
-import { deleteTeacher, resetTeacherPassword, type ActionResult } from './actions'
+import {
+  deleteTeacher,
+  resetTeacherPassword,
+  setTeacherAdmin,
+  type ActionResult,
+} from './actions'
 import ConfirmDialog from '@/components/ConfirmDialog'
 
 export default function TeacherActions({
   id,
   name,
   isSelf,
+  isAdmin,
+  isApiTeacher,
 }: {
   id: number
   name: string
   isSelf: boolean
+  isAdmin: boolean
+  isApiTeacher: boolean
 }) {
   const [resetOpen, setResetOpen] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [deletePending, startDelete] = useTransition()
+  const [adminPending, startAdmin] = useTransition()
+
+  const handleToggleAdmin = () => {
+    startAdmin(async () => {
+      const result = await setTeacherAdmin(id, !isAdmin)
+      if (result.error) setErrorMsg(result.error)
+    })
+  }
   const [resetState, resetAction, resetPending] = useActionState<ActionResult, FormData>(
     resetTeacherPassword.bind(null, id),
     {}
@@ -97,12 +114,24 @@ export default function TeacherActions({
   return (
     <div className="flex items-center gap-1">
       {dialogs}
-      <button
-        onClick={() => setResetOpen(true)}
-        className="text-sm text-indigo-600 hover:text-indigo-800 font-medium px-3 py-1 rounded hover:bg-indigo-50 transition"
-      >
-        รีเซ็ตรหัสผ่าน
-      </button>
+      {!isSelf && (
+        <button
+          onClick={handleToggleAdmin}
+          disabled={adminPending}
+          className="text-sm text-amber-600 hover:text-amber-700 font-medium px-3 py-1 rounded hover:bg-amber-50 transition disabled:opacity-60"
+        >
+          {adminPending ? '...' : isAdmin ? 'ถอนแอดมิน' : 'ตั้งเป็นแอดมิน'}
+        </button>
+      )}
+      {/* ครูจาก API ไม่มีรหัสผ่านในเครื่อง — รีเซ็ตไม่ได้ (เปลี่ยนที่ teacher-api) */}
+      {!isApiTeacher && (
+        <button
+          onClick={() => setResetOpen(true)}
+          className="text-sm text-indigo-600 hover:text-indigo-800 font-medium px-3 py-1 rounded hover:bg-indigo-50 transition"
+        >
+          รีเซ็ตรหัสผ่าน
+        </button>
+      )}
       {!isSelf && (
         <button
           onClick={() => setConfirmOpen(true)}

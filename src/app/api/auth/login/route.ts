@@ -4,10 +4,17 @@ import { signJWT, SESSION_MINUTES, COOKIE_SECURE } from '@/lib/jwt'
 import { getActiveSetting } from '@/lib/academicYear'
 import { findSchoolStudentForLogin } from '@/lib/students'
 import { verifyStudent } from '@/lib/studentApi'
+import { loginTeacher, type ApiTeacher } from '@/lib/teacherApi'
 import bcrypt from 'bcryptjs'
 
 // รหัสผ่านนักเรียน = "Skdw" + เลขบัตรประชาชน 13 หลัก
 const STUDENT_PASSWORD_PREFIX = 'Skdw'
+
+// ประกอบชื่อครูจากโปรไฟล์ที่ teacher-api คืนมา
+function teacherDisplayName(t: ApiTeacher): string {
+  const full = `${t.title ?? ''}${t.first_name} ${t.last_name}`.trim()
+  return full || t.teacher_code
+}
 
 const COOKIE_MAX_AGE = 60 * SESSION_MINUTES // หมดอายุพร้อม token — ต่ออายุเมื่อมีการใช้งาน
 
@@ -33,16 +40,51 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'กรุณากรอกข้อมูลให้ครบถ้วน' }, { status: 400 })
   }
 
-  // ===== ลองเป็นครูก่อน =====
-  const teacher = await prisma.teacher.findUnique({
-    where: { username: username.trim() },
-  })
+  const uname = username.trim()
 
-  if (teacher) {
-    const valid = await bcrypt.compare(password, teacher.password)
+  // ===== บัญชีครู local (fallback) — teacherCode = null, มีรหัสผ่านในเครื่อง =====
+  const localTeacher = await prisma.teacher.findUnique({ where: { username: uname } })
+  if (localTeacher && localTeacher.teacherCode === null && localTeacher.password) {
+    const valid = await bcrypt.compare(password, localTeacher.password)
     if (!valid) {
       return NextResponse.json({ error: 'รหัสผ่านไม่ถูกต้อง' }, { status: 401 })
     }
+
+    const token = await signJWT({
+      userId: localTeacher.id,
+      role: 'teacher',
+      name: localTeacher.name,
+      isAdmin: localTeacher.is_admin,
+    })
+
+    const res = NextResponse.json({ success: true, redirectTo: '/dashboard/teacher' })
+    setAuthCookie(res, token)
+    return res
+  }
+
+  // ===== ครูจาก teacher-api — login ด้วยรหัสประจำตัวครู (teacher_code) + รหัสผ่าน =====
+  // ตรวจกับ API กลาง สำเร็จแล้ว mirror โปรไฟล์ลงตาราง teachers (เก็บ is_admin ในเครื่อง)
+  // เชื่อม API ไม่ได้ → ปล่อยให้ลองเป็นนักเรียน/ผู้เข้าแข่งต่อ (ไม่ block การ login อื่น)
+  let apiTeacher: ApiTeacher | null = null
+  try {
+    apiTeacher = await loginTeacher(uname, password)
+  } catch {
+    apiTeacher = null
+  }
+
+  if (apiTeacher) {
+    const name = teacherDisplayName(apiTeacher)
+    // mirror: ผูกด้วย teacherCode — ไม่เขียนทับ is_admin ที่ตั้งไว้ในเครื่อง
+    const teacher = await prisma.teacher.upsert({
+      where: { teacherCode: apiTeacher.teacher_code },
+      update: { name },
+      create: {
+        teacherCode: apiTeacher.teacher_code,
+        username: apiTeacher.teacher_code,
+        name,
+        is_admin: false,
+      },
+    })
 
     const token = await signJWT({
       userId: teacher.id,

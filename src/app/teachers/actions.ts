@@ -81,6 +81,23 @@ export async function resetTeacherPassword(
   return { success: 'รีเซ็ตรหัสผ่านเรียบร้อย' }
 }
 
+export async function setTeacherAdmin(id: number, isAdmin: boolean): Promise<ActionResult> {
+  await requireAdmin()
+
+  const target = await prisma.teacher.findUnique({ where: { id } })
+  if (!target) return { error: 'ไม่พบบัญชีนี้' }
+
+  // ถอนแอดมินคนสุดท้ายไม่ได้ — ต้องเหลือผู้ดูแลระบบอย่างน้อย 1 คนเสมอ
+  if (target.is_admin && !isAdmin) {
+    const adminCount = await prisma.teacher.count({ where: { is_admin: true } })
+    if (adminCount <= 1) return { error: 'ต้องเหลือผู้ดูแลระบบอย่างน้อย 1 คน' }
+  }
+
+  await prisma.teacher.update({ where: { id }, data: { is_admin: isAdmin } })
+  revalidatePath('/teachers')
+  return { success: isAdmin ? 'ตั้งเป็นผู้ดูแลระบบแล้ว' : 'ถอนสิทธิ์ผู้ดูแลระบบแล้ว' }
+}
+
 export async function deleteTeacher(id: number): Promise<ActionResult> {
   const me = await requireAdmin()
 
