@@ -7,6 +7,38 @@ export type ScratchCheck = {
   opcode?: string // เฉพาะ rule = 'opcode'
 }
 
+// วิธีดักผลลัพธ์ตอนรันโจทย์แบบ "รับค่า → ส่งออก" (โหมด io)
+export type ScratchOutputSpec =
+  | { type: 'say' } // เอาข้อความจากบล็อก "พูด" (ปัดทศนิยม 2 ตำแหน่งเหมือนลูกโป่งคำพูด)
+  | { type: 'variable'; name: string } // เอาค่าสุดท้ายของตัวแปรชื่อนี้
+
+// โหมดการตรวจของโจทย์ Scratch — เก็บใน Problem.scratchConfig (JSON)
+// - blocks: ตรวจว่าใช้บล็อกตามเกณฑ์ (ของเดิม) — config = null ก็ถือเป็นโหมดนี้
+// - io: รันโปรเจกต์จริง ป้อนคำตอบจาก test case แล้วเทียบผลลัพธ์
+export type ScratchConfig =
+  | { mode: 'blocks' }
+  | { mode: 'io'; output: ScratchOutputSpec }
+
+export const DEFAULT_SCRATCH_CONFIG: ScratchConfig = { mode: 'blocks' }
+
+// แปลง JSON จาก DB → ScratchConfig (ของเดิมที่ config = null ถือเป็นโหมด blocks)
+export function parseScratchConfig(json: string | null | undefined): ScratchConfig {
+  if (!json) return DEFAULT_SCRATCH_CONFIG
+  try {
+    const c = JSON.parse(json)
+    if (c?.mode === 'io') {
+      const out = c.output
+      if (out?.type === 'variable' && typeof out.name === 'string' && out.name.trim()) {
+        return { mode: 'io', output: { type: 'variable', name: out.name.trim() } }
+      }
+      return { mode: 'io', output: { type: 'say' } }
+    }
+    return { mode: 'blocks' }
+  } catch {
+    return DEFAULT_SCRATCH_CONFIG
+  }
+}
+
 // สถิติที่แกะได้จากโปรเจกต์
 export type ScratchStats = {
   spriteCount: number

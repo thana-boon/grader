@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { signJWT, SESSION_MINUTES, COOKIE_SECURE } from '@/lib/jwt'
+import { signJWT, COOKIE_SECURE } from '@/lib/jwt'
 import { getActiveSetting } from '@/lib/academicYear'
 import { findSchoolStudentForLogin } from '@/lib/students'
 import { verifyStudent } from '@/lib/studentApi'
@@ -16,14 +16,14 @@ function teacherDisplayName(t: ApiTeacher): string {
   return full || t.teacher_code
 }
 
-const COOKIE_MAX_AGE = 60 * SESSION_MINUTES // หมดอายุพร้อม token — ต่ออายุเมื่อมีการใช้งาน
-
 function setAuthCookie(response: NextResponse, token: string) {
+  // ไม่ตั้ง maxAge/expires = session cookie — ปิดเบราว์เซอร์แล้ว cookie หายทันที
+  // (กันเคสห้องคอม: นักเรียนปิดเบราว์เซอร์โดยไม่ logout คนต่อไปเปิดมาจะไม่ติด session เดิม)
+  // อายุ session จริงคุมด้วย token TTL (idle) + absolute timeout ฝั่งเซิร์ฟเวอร์อยู่แล้ว
   response.cookies.set('auth-token', token, {
     httpOnly: true,
     secure: COOKIE_SECURE,
     sameSite: 'lax',
-    maxAge: COOKIE_MAX_AGE,
     path: '/',
   })
 }

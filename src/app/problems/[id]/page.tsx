@@ -68,6 +68,7 @@ export default async function EditProblemPage({
                 : undefined,
             datasetName: problem.datasetName ?? undefined,
             datasetContent: problem.datasetContent ?? undefined,
+            scratchConfig: problem.scratchConfig,
           }}
           submitLabel="บันทึกการแก้ไข"
         />

@@ -7,6 +7,7 @@ import {
   describeScratchCheck,
   SCRATCH_RULES,
   type ScratchCheck,
+  type ScratchOutputSpec,
 } from '@/lib/scratchGrading'
 import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
@@ -36,6 +37,7 @@ type ParsedProblem = {
   solutionCode: string | null
   datasetName: string | null
   datasetContent: string | null
+  scratchConfig: string | null
   testCases: ParsedTestCase[]
 }
 
@@ -94,7 +96,61 @@ function parseProblemForm(formData: FormData): ParseResult {
         solutionCode,
         datasetName: null,
         datasetContent: null,
+        scratchConfig: null,
         testCases: [{ input: '', expectedOutput: drawing, isHidden: false }],
+      },
+    }
+  }
+
+  // โหมด scratch แบบ io — รับค่า → ส่งออก: รันโปรเจกต์จริง เคสเหมือนภาษาอื่น
+  // (input = คำตอบที่ป้อนบรรทัดละค่า, expectedOutput = ผลลัพธ์ที่ต้องการ)
+  if (language === 'scratch' && formData.get('scratchMode') === 'io') {
+    const outType = formData.get('scratchOutputType') === 'variable' ? 'variable' : 'say'
+    let output: ScratchOutputSpec
+    if (outType === 'variable') {
+      const name = ((formData.get('scratchVariableName') as string) ?? '').trim()
+      if (!name) {
+        return { ok: false, error: 'เลือกแสดงผลจากตัวแปร แต่ยังไม่ได้ใส่ชื่อตัวแปร' }
+      }
+      output = { type: 'variable', name }
+    } else {
+      output = { type: 'say' }
+    }
+
+    let rawIo: unknown
+    try {
+      rawIo = JSON.parse((formData.get('testCases') as string) ?? '[]')
+    } catch {
+      return { ok: false, error: 'ข้อมูล test case ไม่ถูกต้อง' }
+    }
+    if (!Array.isArray(rawIo) || rawIo.length === 0) {
+      return { ok: false, error: 'ต้องมี test case อย่างน้อย 1 ชุด' }
+    }
+    if (rawIo.length > MAX_TEST_CASES) {
+      return { ok: false, error: `test case ได้สูงสุด ${MAX_TEST_CASES} ชุด` }
+    }
+    const ioCases: ParsedTestCase[] = []
+    for (const [i, tc] of rawIo.entries()) {
+      const input = typeof tc?.input === 'string' ? tc.input : ''
+      const expectedOutput = typeof tc?.expectedOutput === 'string' ? tc.expectedOutput : ''
+      if (!expectedOutput.trim()) {
+        return { ok: false, error: `test case ที่ ${i + 1} ยังไม่ได้ใส่ผลลัพธ์ที่ต้องการ` }
+      }
+      ioCases.push({ input, expectedOutput, isHidden: tc?.isHidden === true })
+    }
+
+    return {
+      ok: true,
+      data: {
+        title,
+        description,
+        language,
+        starterCode: null,
+        solutionCode: null,
+        datasetName: null,
+        datasetContent: null,
+        scratchConfig: JSON.stringify({ mode: 'io', output }),
+        testCases: ioCases,
       },
     }
   }
@@ -145,6 +201,7 @@ function parseProblemForm(formData: FormData): ParseResult {
         solutionCode: null,
         datasetName: null,
         datasetContent: null,
+        scratchConfig: null,
         testCases,
       },
     }
@@ -198,6 +255,7 @@ function parseProblemForm(formData: FormData): ParseResult {
         solutionCode,
         datasetName: null,
         datasetContent: null,
+        scratchConfig: null,
         testCases,
       },
     }
@@ -237,6 +295,7 @@ function parseProblemForm(formData: FormData): ParseResult {
       solutionCode,
       datasetName,
       datasetContent,
+      scratchConfig: null,
       testCases,
     },
   }

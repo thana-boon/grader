@@ -52,6 +52,7 @@ model Problem {
   solutionCode String? @map("solution_code") @db.Text // เฉลยของครู — ใช้สร้าง output อัตโนมัติ + อ้างอิง (ไม่ส่งให้นักเรียน)
   datasetName    String? @map("dataset_name") // ชื่อไฟล์ข้อมูลแนบ เช่น data.csv (pandas)
   datasetContent String? @map("dataset_content") @db.MediumText // เนื้อหาไฟล์ — เขียนลง FS ของ Pyodide ก่อนรัน
+  scratchConfig  String? @map("scratch_config") @db.Text // เฉพาะ scratch: JSON โหมดตรวจ {mode:'io',output:{...}} — null = โหมดนับบล็อก (เดิม)
   createdById  Int     @map("created_by_id")
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt

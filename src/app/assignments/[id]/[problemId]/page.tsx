@@ -142,6 +142,7 @@ export default async function ProblemWorkspacePage({
               ? (problem.testCases[0]?.expectedOutput ?? null)
               : null
           }
+          scratchConfig={problem.scratchConfig}
           dataset={
             problem.datasetName && problem.datasetContent
               ? { name: problem.datasetName, content: problem.datasetContent }

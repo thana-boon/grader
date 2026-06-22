@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { verifyJWT, renewJWT, SESSION_MINUTES, COOKIE_SECURE } from '@/lib/jwt'
+import { verifyJWT, renewJWT, COOKIE_SECURE } from '@/lib/jwt'
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
@@ -82,13 +82,13 @@ export async function middleware(request: NextRequest) {
     return redirectTo('/dashboard/teacher')
   }
 
-  // ต่ออายุ session ทุกครั้งที่มีการใช้งาน (sliding) — เงียบครบ 30 นาที token จะหมดอายุเอง
+  // ต่ออายุ session ทุกครั้งที่มีการใช้งาน (sliding) — เงียบครบ SESSION_MINUTES token จะหมดอายุเอง
+  // ไม่ตั้ง maxAge = session cookie (หายเมื่อปิดเบราว์เซอร์); อายุจริงคุมด้วย token TTL + absolute timeout
   const res = NextResponse.next()
   res.cookies.set('auth-token', await renewJWT(user), {
     httpOnly: true,
     secure: COOKIE_SECURE,
     sameSite: 'lax',
-    maxAge: 60 * SESSION_MINUTES,
     path: '/',
   })
   return res

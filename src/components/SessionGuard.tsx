@@ -2,14 +2,14 @@
 
 // เฝ้าดู session ฝั่งเบราว์เซอร์ (ฝังอยู่ใน Navbar = ทุกหน้าที่ล็อกอินแล้ว)
 // - ขยับเมาส์/พิมพ์/แตะจอ = ยังใช้งานอยู่ → ต่ออายุ token ฝั่งเซิร์ฟเวอร์เป็นระยะ
-// - เงียบครบ 30 นาที → ออกจากระบบแล้วพากลับหน้า login
+// - เงียบครบ 10 นาที → ออกจากระบบแล้วพากลับหน้า login
 
 import { useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { withBase } from '@/lib/basePath'
 
-const IDLE_MS = 30 * 60 * 1000 // ต้องเท่ากับ SESSION_MINUTES ใน src/lib/jwt.ts
-const PING_MS = 5 * 60 * 1000 // ต่ออายุ token ทุก 5 นาทีระหว่างยังใช้งาน
+const IDLE_MS = 10 * 60 * 1000 // ต้องเท่ากับ SESSION_MINUTES ใน src/lib/jwt.ts
+const PING_MS = 3 * 60 * 1000 // ต่ออายุ token ทุก 3 นาทีระหว่างยังใช้งาน (ต้อง < SESSION_MINUTES)
 const CHECK_MS = 60 * 1000
 
 export default function SessionGuard() {

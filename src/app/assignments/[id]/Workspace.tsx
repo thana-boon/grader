@@ -9,6 +9,7 @@ import {
   evaluateScratch,
   parseSb3,
   parseScratchCheck,
+  parseScratchConfig,
   type ScratchStats,
 } from '@/lib/scratchGrading'
 import { languageLabel } from '@/lib/languages'
@@ -38,6 +39,7 @@ export default function Workspace({
   starterCode,
   testCases,
   expectedDrawing,
+  scratchConfig,
   dataset,
   lastCode,
   canSubmit,
@@ -51,6 +53,7 @@ export default function Workspace({
   starterCode: string
   testCases: WorkspaceTestCase[]
   expectedDrawing: string | null
+  scratchConfig: string | null
   dataset: { name: string; content: string } | null
   lastCode: string | null
   canSubmit: boolean
@@ -67,6 +70,10 @@ export default function Workspace({
   const isHtml = language === 'html'
   const isPhp = language === 'php'
   const isScratch = language === 'scratch'
+  // โหมดตรวจ scratch: blocks = นับบล็อก, io = รับค่า-ส่งออก (รันจริง)
+  const scratchCfg = isScratch ? parseScratchConfig(scratchConfig) : null
+  const isScratchIo = scratchCfg?.mode === 'io'
+  const isScratchBlocks = isScratch && !isScratchIo
 
   // ตัวเลือกตัวรัน — pandas ต้องโหลดแพ็กเกจ + เขียนไฟล์ข้อมูลก่อนรัน
   const runOpts = () => ({
@@ -106,6 +113,38 @@ export default function Workspace({
     }
     const flags = evaluateScratch(sb3Stats, scratchChecks)
     setResults(flags.map((pass) => ({ pass, actual: '', error: null, timedOut: false })))
+    return flags
+  }
+
+  // โหมด scratch io: รันโปรเจกต์จริงทีละเคส ป้อนคำตอบจาก input แล้วเทียบผลลัพธ์
+  const runScratchIo = async (): Promise<boolean[] | null> => {
+    if (!sb3File || !scratchCfg || scratchCfg.mode !== 'io') {
+      setErrorModal('เลือกไฟล์ .sb3 ของคุณก่อน')
+      return null
+    }
+    const { runScratchProject } = await import('@/lib/scratchRunner')
+    const buffer = await sb3File.arrayBuffer()
+    const out: (CaseResult | null)[] = testCases.map(() => null)
+    const flags: boolean[] = []
+    for (let i = 0; i < testCases.length; i++) {
+      setStatusMsg(`กำลังรันเคสที่ ${i + 1}/${testCases.length}...`)
+      const answers =
+        testCases[i].input === ''
+          ? []
+          : testCases[i].input.replace(/\r/g, '').replace(/\n$/, '').split('\n')
+      // ส่ง buffer ใหม่ทุกเคส (scratch-vm อาจ consume ArrayBuffer ต้นฉบับ)
+      const res = await runScratchProject(buffer.slice(0), answers, scratchCfg.output)
+      const pass = res.ok && outputMatches(res.output, testCases[i].expectedOutput)
+      out[i] = {
+        pass,
+        actual: res.output,
+        error: res.error,
+        timedOut: res.timedOut,
+      }
+      flags.push(pass)
+      setResults([...out])
+    }
+    setStatusMsg(null)
     return flags
   }
 
@@ -235,7 +274,21 @@ export default function Workspace({
   // ภาษาอื่นใช้ "รันอิสระ" แทน และตรวจทุกเคสตอนกดส่งงานเท่านั้น
   const handleRun = async () => {
     if (isScratch) {
-      runScratchChecks()
+      if (isScratchIo) {
+        if (!sb3File) {
+          setErrorModal('เลือกไฟล์ .sb3 ของคุณก่อน')
+          return
+        }
+        setBusy('run')
+        try {
+          await runScratchIo()
+        } finally {
+          setBusy('idle')
+          setStatusMsg(null)
+        }
+      } else {
+        runScratchChecks()
+      }
       return
     }
     if (!code.trim()) {
@@ -309,7 +362,7 @@ export default function Workspace({
       } else if (isHtml) {
         payload = runHtmlChecks()
       } else if (isScratch) {
-        const flags = runScratchChecks()
+        const flags = isScratchIo ? await runScratchIo() : runScratchChecks()
         if (!flags || !sb3File || !sb3Stats) return
         // อัปโหลดไฟล์ .sb3 ให้ครูดาวน์โหลดไปเปิดดูได้
         setStatusMsg('กำลังอัปโหลดไฟล์...')
@@ -411,7 +464,7 @@ export default function Workspace({
                   disabled={busy !== 'idle'}
                   className="px-4 py-1.5 text-sm font-medium text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition disabled:opacity-60"
                 >
-                  ▶ ตรวจไฟล์
+                  {busy === 'run' ? 'กำลังรัน...' : isScratchIo ? '▶ ทดลองรัน' : '▶ ตรวจไฟล์'}
                 </button>
                 <button
                   onClick={handleSubmit}
@@ -444,33 +497,106 @@ export default function Workspace({
             </p>
           </div>
 
-          <div className="bg-white rounded-2xl border border-indigo-100 shadow-sm p-5">
-            <h2 className="text-base font-semibold text-gray-900 mb-3">
-              เกณฑ์การตรวจ ({testCases.length} ข้อ)
-            </h2>
-            <ul className="space-y-2">
-              {testCases.map((tc, i) => {
-                const r = results[i]
-                return (
-                  <li
-                    key={i}
-                    className="flex items-center justify-between border border-gray-200 rounded-lg px-4 py-3"
-                  >
-                    <p className="text-sm text-gray-700">
-                      {tc.isHidden ? (
-                        <span className="text-gray-400">
-                          เกณฑ์ลับข้อที่ {i + 1} — ตรวจตอนกดส่ง
-                        </span>
-                      ) : (
-                        tc.expectedOutput
-                      )}
-                    </p>
-                    {caseStatus(r)}
-                  </li>
-                )
-              })}
-            </ul>
-          </div>
+          {isScratchBlocks && (
+            <div className="bg-white rounded-2xl border border-indigo-100 shadow-sm p-5">
+              <h2 className="text-base font-semibold text-gray-900 mb-3">
+                เกณฑ์การตรวจ ({testCases.length} ข้อ)
+              </h2>
+              <ul className="space-y-2">
+                {testCases.map((tc, i) => {
+                  const r = results[i]
+                  return (
+                    <li
+                      key={i}
+                      className="flex items-center justify-between border border-gray-200 rounded-lg px-4 py-3"
+                    >
+                      <p className="text-sm text-gray-700">
+                        {tc.isHidden ? (
+                          <span className="text-gray-400">
+                            เกณฑ์ลับข้อที่ {i + 1} — ตรวจตอนกดส่ง
+                          </span>
+                        ) : (
+                          tc.expectedOutput
+                        )}
+                      </p>
+                      {caseStatus(r)}
+                    </li>
+                  )
+                })}
+              </ul>
+            </div>
+          )}
+
+          {isScratchIo && (
+            <div className="bg-white rounded-2xl border border-indigo-100 shadow-sm p-5">
+              <h2 className="text-base font-semibold text-gray-900 mb-1">
+                เคสทดสอบ ({testCases.length})
+              </h2>
+              <p className="text-xs text-gray-400 mb-3">
+                ระบบจะรันโปรเจกต์ ป้อนคำตอบให้บล็อก &quot;ถามแล้วรอ&quot; ตามลำดับ แล้วเทียบผลลัพธ์
+              </p>
+              <div className="space-y-3">
+                {testCases.map((tc, i) => {
+                  const r = results[i]
+                  if (tc.isHidden) {
+                    return (
+                      <div
+                        key={i}
+                        className="flex items-center justify-between border border-gray-200 rounded-lg px-4 py-3 bg-gray-50"
+                      >
+                        <p className="text-sm text-gray-500">
+                          เคสที่ {i + 1} (ซ่อน) — ตรวจตอนกดส่งงาน
+                        </p>
+                        {caseStatus(r)}
+                      </div>
+                    )
+                  }
+                  return (
+                    <div key={i} className="border border-gray-200 rounded-lg p-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="text-sm font-medium text-gray-700">เคสที่ {i + 1}</p>
+                        {caseStatus(r)}
+                      </div>
+                      <div className="grid sm:grid-cols-3 gap-3 text-sm">
+                        <div>
+                          <p className="text-xs text-gray-400 mb-1">คำตอบที่ป้อน</p>
+                          <pre className="bg-gray-50 border border-gray-100 rounded p-2 font-mono text-xs whitespace-pre-wrap min-h-8">
+                            {tc.input || '—'}
+                          </pre>
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-400 mb-1">ผลลัพธ์ที่ต้องการ</p>
+                          <pre className="bg-gray-50 border border-gray-100 rounded p-2 font-mono text-xs whitespace-pre-wrap min-h-8">
+                            {tc.expectedOutput}
+                          </pre>
+                        </div>
+                        <div>
+                          <p className="text-xs text-gray-400 mb-1">ผลลัพธ์ของคุณ</p>
+                          <pre
+                            className={`border rounded p-2 font-mono text-xs whitespace-pre-wrap min-h-8 ${
+                              r
+                                ? r.pass
+                                  ? 'bg-green-50 border-green-200'
+                                  : 'bg-red-50 border-red-200'
+                                : 'bg-gray-50 border-gray-100'
+                            }`}
+                          >
+                            {r
+                              ? r.timedOut
+                                ? '(รันนานเกินไป — อาจวน loop)'
+                                : r.error
+                                  ? r.error
+                                  : r.actual || '(ไม่มีผลลัพธ์)'
+                              : 'แสดงหลังกดรัน/ส่ง'}
+                          </pre>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
         </>
       )}
 

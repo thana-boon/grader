@@ -14,6 +14,7 @@ import {
   describeScratchCheck,
   evaluateScratch,
   parseScratchCheck,
+  parseScratchConfig,
   parseSb3,
   SCRATCH_RULES,
   SPECIAL_RULES,
@@ -36,6 +37,7 @@ type ProblemInitial = {
   expectedDrawing?: string // JSON ภาพเฉลย (เฉพาะ turtle)
   datasetName?: string // ไฟล์ข้อมูลแนบ (เฉพาะ pandas)
   datasetContent?: string
+  scratchConfig?: string | null // JSON โหมดตรวจ scratch (เฉพาะ scratch)
 }
 
 const EMPTY_CASE: TestCaseInput = { input: '', expectedOutput: '', isHidden: false }
@@ -167,6 +169,22 @@ export default function ProblemForm({
 
   const updateScratchCheck = (i: number, patch: Partial<EditableScratchCheck>) =>
     setScratchChecks((prev) => prev.map((c, j) => (j === i ? { ...c, ...patch } : c)))
+
+  // โหมดตรวจ scratch: 'blocks' = นับบล็อก (เดิม), 'io' = รับค่า-ส่งออก (รันจริง)
+  const initialScratchConfig = parseScratchConfig(initial?.scratchConfig)
+  const [scratchMode, setScratchMode] = useState<'blocks' | 'io'>(initialScratchConfig.mode)
+  const [scratchOutputType, setScratchOutputType] = useState<'say' | 'variable'>(
+    initialScratchConfig.mode === 'io' && initialScratchConfig.output.type === 'variable'
+      ? 'variable'
+      : 'say'
+  )
+  const [scratchVariableName, setScratchVariableName] = useState(
+    initialScratchConfig.mode === 'io' && initialScratchConfig.output.type === 'variable'
+      ? initialScratchConfig.output.name
+      : ''
+  )
+  const isScratchIo = isScratch && scratchMode === 'io'
+  const isScratchBlocks = isScratch && scratchMode === 'blocks'
 
   // ทดสอบเกณฑ์กับไฟล์ .sb3 เฉลยของครู (ไฟล์ไม่ถูกเก็บ — ใช้ทดสอบอย่างเดียว)
   const testScratchFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -513,8 +531,94 @@ export default function ProblemForm({
         </div>
       )}
 
-      {/* โหมด scratch: เกณฑ์การตรวจ block */}
+      {/* โหมด scratch: เลือกวิธีตรวจ */}
       {isScratch && (
+        <div className="bg-white rounded-2xl border border-indigo-100 shadow-sm p-6">
+          <h2 className="text-base font-semibold text-gray-900 mb-3">วิธีตรวจโจทย์ Scratch</h2>
+          <div className="grid sm:grid-cols-2 gap-3">
+            <label
+              className={`flex flex-col gap-1 border rounded-lg p-4 cursor-pointer transition ${
+                scratchMode === 'blocks'
+                  ? 'border-indigo-400 bg-indigo-50'
+                  : 'border-gray-200 hover:border-gray-300'
+              }`}
+            >
+              <span className="flex items-center gap-2 text-sm font-medium text-gray-800">
+                <input
+                  type="radio"
+                  name="scratchModeRadio"
+                  checked={scratchMode === 'blocks'}
+                  onChange={() => setScratchMode('blocks')}
+                  className="text-indigo-600 focus:ring-indigo-500"
+                />
+                นับบล็อก (โครงสร้าง)
+              </span>
+              <span className="text-xs text-gray-500 pl-6">
+                ตรวจว่าใช้บล็อกตามเกณฑ์ เช่น มี loop / ใช้ตัวแปร — ไม่รันโปรแกรม
+              </span>
+            </label>
+            <label
+              className={`flex flex-col gap-1 border rounded-lg p-4 cursor-pointer transition ${
+                scratchMode === 'io'
+                  ? 'border-indigo-400 bg-indigo-50'
+                  : 'border-gray-200 hover:border-gray-300'
+              }`}
+            >
+              <span className="flex items-center gap-2 text-sm font-medium text-gray-800">
+                <input
+                  type="radio"
+                  name="scratchModeRadio"
+                  checked={scratchMode === 'io'}
+                  onChange={() => setScratchMode('io')}
+                  className="text-indigo-600 focus:ring-indigo-500"
+                />
+                รับค่า → ส่งออก (รันจริง)
+              </span>
+              <span className="text-xs text-gray-500 pl-6">
+                รันโปรเจกต์จริง ป้อนคำตอบให้บล็อก &quot;ถามแล้วรอ&quot; แล้วเทียบผลลัพธ์ —
+                เหมาะกับโจทย์คำนวณ เช่น หา BMI
+              </span>
+            </label>
+          </div>
+
+          {isScratchIo && (
+            <div className="mt-4 border-t border-gray-100 pt-4">
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                เก็บผลลัพธ์จากไหน
+              </label>
+              <div className="flex flex-wrap items-center gap-3">
+                <select
+                  value={scratchOutputType}
+                  onChange={(e) =>
+                    setScratchOutputType(e.target.value as 'say' | 'variable')
+                  }
+                  className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                >
+                  <option value="say">บล็อก &quot;พูด&quot; (say) — แนะนำ</option>
+                  <option value="variable">ค่าของตัวแปร</option>
+                </select>
+                {scratchOutputType === 'variable' && (
+                  <input
+                    type="text"
+                    value={scratchVariableName}
+                    onChange={(e) => setScratchVariableName(e.target.value)}
+                    placeholder="ชื่อตัวแปร เช่น BMI"
+                    className="flex-1 min-w-44 px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                )}
+              </div>
+              <p className="text-xs text-gray-500 mt-2">
+                {scratchOutputType === 'say'
+                  ? 'นักเรียนต้องให้ตัวละคร "พูด" คำตอบออกมา — ตัวเลขทศนิยมจะถูกปัดเหลือ 2 ตำแหน่งเหมือนลูกโป่งคำพูดจริง (เช่น 20.76)'
+                  : 'อ่านค่าสุดท้ายของตัวแปรชื่อนี้หลังโปรแกรมจบ — ใส่ชื่อให้ตรงกับในโปรเจกต์ (ตัวพิมพ์เล็ก/ใหญ่ไม่ต้องตรง) ค่าตัวแปรไม่ถูกปัดทศนิยม'}
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* โหมด scratch (นับบล็อก): เกณฑ์การตรวจ block */}
+      {isScratchBlocks && (
         <div className="bg-white rounded-2xl border border-indigo-100 shadow-sm p-6">
           <div className="flex items-center justify-between mb-1">
             <h2 className="text-base font-semibold text-gray-900">
@@ -822,20 +926,22 @@ export default function ProblemForm({
       )}
 
       {/* Test cases */}
-      <div className={`bg-white rounded-2xl border border-indigo-100 shadow-sm p-6 ${isTurtle || isHtml || isScratch ? 'hidden' : ''}`}>
+      <div className={`bg-white rounded-2xl border border-indigo-100 shadow-sm p-6 ${isTurtle || isHtml || isScratchBlocks ? 'hidden' : ''}`}>
         <div className="flex items-center justify-between mb-1">
           <h2 className="text-base font-semibold text-gray-900">
             Test cases ({testCases.length})
           </h2>
           <div className="flex items-center gap-1">
-            <button
-              type="button"
-              onClick={generateOutputs}
-              disabled={genBusy}
-              className="text-sm text-emerald-700 hover:text-emerald-800 font-medium px-3 py-1 rounded hover:bg-emerald-50 transition disabled:opacity-60"
-            >
-              {genBusy ? 'กำลังรันเฉลย...' : '⚡ สร้าง output จากเฉลย'}
-            </button>
+            {!isScratch && (
+              <button
+                type="button"
+                onClick={generateOutputs}
+                disabled={genBusy}
+                className="text-sm text-emerald-700 hover:text-emerald-800 font-medium px-3 py-1 rounded hover:bg-emerald-50 transition disabled:opacity-60"
+              >
+                {genBusy ? 'กำลังรันเฉลย...' : '⚡ สร้าง output จากเฉลย'}
+              </button>
+            )}
             <button
               type="button"
               onClick={addCase}
@@ -846,8 +952,9 @@ export default function ProblemForm({
           </div>
         </div>
         <p className="text-xs text-gray-400 mb-2">
-          ระบบจะป้อน input ให้โปรแกรมนักเรียนแล้วเทียบ output (ไม่สนช่องว่างท้ายบรรทัด)
-          — เคสที่ &quot;ซ่อน&quot; นักเรียนจะเห็นแค่ผ่าน/ไม่ผ่าน ช่วยกันเดาคำตอบ
+          {isScratchIo
+            ? 'ใส่ "คำตอบ" ที่จะป้อนให้บล็อกถามทีละค่า (บรรทัดละค่า ตามลำดับที่โปรแกรมถาม) แล้วใส่ผลลัพธ์ที่ต้องการ — เคสที่ "ซ่อน" นักเรียนเห็นแค่ผ่าน/ไม่ผ่าน'
+            : 'ระบบจะป้อน input ให้โปรแกรมนักเรียนแล้วเทียบ output (ไม่สนช่องว่างท้ายบรรทัด) — เคสที่ "ซ่อน" นักเรียนจะเห็นแค่ผ่าน/ไม่ผ่าน ช่วยกันเดาคำตอบ'}
         </p>
         {genMsg && (
           <div
@@ -920,6 +1027,9 @@ export default function ProblemForm({
 
       <input type="hidden" name="testCases" value={JSON.stringify(testCases)} />
       <input type="hidden" name="expectedDrawing" value={expectedDrawing ?? ''} />
+      <input type="hidden" name="scratchMode" value={scratchMode} />
+      <input type="hidden" name="scratchOutputType" value={scratchOutputType} />
+      <input type="hidden" name="scratchVariableName" value={scratchVariableName} />
       <input
         type="hidden"
         name="scratchChecks"
